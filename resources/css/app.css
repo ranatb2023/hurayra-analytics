@@ -1,0 +1,156 @@
+@import 'tailwindcss';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source '../**/*.blade.php';
+@source '../**/*.js';
+
+@theme {
+    --font-sans: 'Causten Round', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+        'Segoe UI Symbol', 'Noto Color Emoji';
+
+    /* --- Brand palette ---------------------------------------------------
+       Override Tailwind's blue-family scales with the three brand colours so
+       all existing utility classes re-theme automatically:
+         pink #d46681  ← indigo / violet / purple / fuchsia
+         teal #61bac0  ← blue / sky / cyan / teal
+         gold #e4b450  ← amber / orange
+       Greens (emerald) and reds (rose) are kept for +/- comparison badges. */
+
+    /* Pink ramp */
+    --color-indigo-50: #fbeef2;
+    --color-indigo-100: #f8dde4;
+    --color-indigo-200: #f1bccb;
+    --color-indigo-300: #e899ad;
+    --color-indigo-400: #de7d96;
+    --color-indigo-500: #d46681;
+    --color-indigo-600: #c14e6b;
+    --color-indigo-700: #a23e58;
+    --color-indigo-800: #863349;
+    --color-violet-50: #fbeef2;
+    --color-violet-400: #de7d96;
+    --color-violet-500: #d46681;
+    --color-violet-600: #c14e6b;
+    --color-violet-700: #a23e58;
+    --color-violet-800: #863349;
+    --color-purple-400: #de7d96;
+    --color-purple-500: #d46681;
+    --color-fuchsia-50: #fbeef2;
+    --color-fuchsia-400: #de7d96;
+    --color-fuchsia-500: #d46681;
+    --color-fuchsia-600: #c14e6b;
+
+    /* Teal ramp */
+    --color-teal-50: #eef8f9;
+    --color-teal-400: #79c8cd;
+    --color-teal-500: #61bac0;
+    --color-teal-600: #4a9aa0;
+    --color-sky-50: #eef8f9;
+    --color-sky-400: #79c8cd;
+    --color-sky-500: #61bac0;
+    --color-sky-600: #4a9aa0;
+    --color-blue-500: #61bac0;
+    --color-cyan-500: #61bac0;
+
+    /* Gold ramp */
+    --color-amber-50: #fdf8ec;
+    --color-amber-100: #faefd0;
+    --color-amber-400: #e9c05f;
+    --color-amber-500: #e4b450;
+    --color-amber-600: #c9962f;
+    --color-amber-700: #a5762a;
+    --color-orange-500: #e4b450;
+}
+
+/* Causten Round (self-hosted). Drop the .woff2 files into
+   public/assets/fonts/ with these exact names. Until then the stack falls
+   back to the system sans-serif. */
+@font-face {
+    font-family: 'Causten Round';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/assets/fonts/CaustenRound-Regular.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Causten Round';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('/assets/fonts/CaustenRound-Medium.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Causten Round';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('/assets/fonts/CaustenRound-SemiBold.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Causten Round';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('/assets/fonts/CaustenRound-Bold.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Causten Round';
+    font-style: normal;
+    font-weight: 800;
+    font-display: swap;
+    src: url('/assets/fonts/CaustenRound-ExtraBold.woff2') format('woff2');
+}
+
+/* Alpine: hide elements until initialised to avoid layout flashes. */
+[x-cloak] {
+    display: none !important;
+}
+
+/* Premium ambient background: soft slate base + two faint colour blooms. */
+body {
+    background-color: #f6f7fb;
+    background-image:
+        radial-gradient(60rem 40rem at 110% -10%, rgba(212, 102, 129, 0.12), transparent 60%),
+        radial-gradient(50rem 40rem at -10% 0%, rgba(97, 186, 192, 0.12), transparent 55%);
+    background-attachment: fixed;
+}
+
+/* Numbers in cards animate up subtly when they change value. */
+@keyframes pop-in {
+    0% { opacity: 0; transform: translateY(4px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+
+.animate-pop {
+    animation: pop-in 0.25s ease-out;
+}
+
+/* Print: drop chrome, keep the report. */
+@media print {
+    /* Force backgrounds/gradients to render so icon chips, the hero band and
+       accent bars (and their white icons) aren't dropped to white-on-white. */
+    *,
+    *::before,
+    *::after {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+
+    .no-print { display: none !important; }
+    body { background: #fff; }
+    .print-block { break-inside: avoid; }
+}
+
+/* Slim, modern scrollbars. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(100, 116, 139, 0.35) transparent;
+}
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.35);
+    border-radius: 9999px;
+}
