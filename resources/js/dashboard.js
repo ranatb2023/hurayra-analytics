@@ -32,6 +32,14 @@ export default (config = {}) => ({
     cohorts: null,
     copied: false,
 
+    // One-time buyers who later subscribed (lifetime, independent of the filter).
+    upsell: { rows: [], summary: {}, total: 0 },
+    upsellLoading: false,
+    upsellConversionsOnly: true,   // subscription must start on/after the one-time order
+    upsellCompletedOnly: false,    // count only completed one-time orders
+    upsellSearch: '',
+    upsellShown: 25,
+
     // Klaviyo email-performance tiles (read from stored snapshots).
     klaviyo: { state: 'loading', tiles: {}, syncedAt: null, error: null, revision: '', configured: false },
     klaviyoPolls: 0,
@@ -52,6 +60,7 @@ export default (config = {}) => ({
         this.fetchSparklines();
         this.fetchTopCustomers();
         this.fetchCohorts();
+        this.fetchUpsell();
     },
 
     /** Day-based weeks within the selected month: 1–7, 8–14, … */
@@ -157,6 +166,75 @@ export default (config = {}) => ({
             const res = await fetch('/api/metrics/cohorts?offset=6', { headers: { Accept: 'application/json' } });
             if (res.ok) this.cohorts = await res.json();
         } catch (_) { /* non-critical */ }
+    },
+
+    // --- one-time -> subscription upsell list ---
+    upsellParams() {
+        const p = new URLSearchParams();
+        p.set('conversions_only', this.upsellConversionsOnly ? '1' : '0');
+        p.set('completed_only', this.upsellCompletedOnly ? '1' : '0');
+        return p;
+    },
+
+    async fetchUpsell() {
+        this.upsellLoading = true;
+        try {
+            const p = this.upsellParams();
+            p.set('limit', '500');
+            const res = await fetch(`/api/metrics/one-time-to-subscription?${p.toString()}`, {
+                headers: { Accept: 'application/json' },
+            });
+            if (res.ok) {
+                const data = await res.json();
+                this.upsell = { rows: data.customers ?? [], summary: data.summary ?? {}, total: data.total ?? 0 };
+                this.upsellShown = 25;
+            }
+        } catch (_) { /* non-critical panel */ } finally {
+            this.upsellLoading = false;
+        }
+    },
+
+    upsellExportHref() {
+        return `/api/metrics/one-time-to-subscription/export?${this.upsellParams().toString()}`;
+    },
+
+    /** Search-filtered rows (email / customer id / subscription id). */
+    upsellMatches() {
+        const q = this.upsellSearch.trim().toLowerCase();
+        if (!q) return this.upsell.rows;
+        return this.upsell.rows.filter((r) =>
+            (r.email ?? '').toLowerCase().includes(q)
+            || String(r.customer_id ?? '').includes(q)
+            || String(r.subscription_id ?? '').includes(q));
+    },
+
+    upsellVisible() {
+        return this.upsellMatches().slice(0, this.upsellShown);
+    },
+
+    /** Format a stored "Y-m-d H:i:s" GMT stamp without shifting the day. */
+    dateLabel(value) {
+        if (!value) return '—';
+        const [y, m, d] = String(value).split(' ')[0].split('-');
+        if (!y || !m || !d) return String(value);
+        return new Date(+y, +m - 1, +d).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+    },
+
+    daysLabel(days) {
+        if (days === null || days === undefined) return '—';
+        if (days === 0) return 'same day';
+        return `${new Intl.NumberFormat().format(days)} day${days === 1 ? '' : 's'}`;
+    },
+
+    subStatusClass(status) {
+        return {
+            active: 'bg-emerald-50 text-emerald-700',
+            'on-hold': 'bg-amber-50 text-amber-700',
+            cancelled: 'bg-rose-50 text-rose-700',
+            'pending-cancel': 'bg-orange-50 text-orange-700',
+            expired: 'bg-slate-100 text-slate-600',
+            pending: 'bg-sky-50 text-sky-700',
+        }[status] ?? 'bg-slate-100 text-slate-600';
     },
 
     async fetchTrend() {

@@ -79,6 +79,54 @@ class MetricsController extends Controller
         ]);
     }
 
+    /** AJAX endpoint: customers who bought one-off first, then subscribed. */
+    public function oneTimeToSubscription(Request $request): JsonResponse
+    {
+        return response()->json($this->metrics->oneTimeToSubscription(
+            conversionsOnly: $request->boolean('conversions_only', true),
+            completedOnly: $request->boolean('completed_only'),
+            limit: min(5000, max(1, (int) $request->integer('limit', 500))),
+        ));
+    }
+
+    /** Download the full one-time → subscription list (no row cap). */
+    public function oneTimeToSubscriptionExport(Request $request): StreamedResponse
+    {
+        $data = $this->metrics->oneTimeToSubscription(
+            conversionsOnly: $request->boolean('conversions_only', true),
+            completedOnly: $request->boolean('completed_only'),
+        );
+
+        return response()->streamDownload(function () use ($data) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, [
+                'Customer', 'Customer ID', 'First one-time order', 'Last one-time order',
+                'One-time orders', 'One-time spend (completed)', 'Subscribed on', 'Days to convert',
+                'Subscription ID', 'Subscription status', 'Subscriptions', 'Subscription orders',
+                'Subscription spend (completed)', 'Subscription after one-time',
+            ]);
+
+            foreach ($data['customers'] as $c) {
+                fputcsv($out, [
+                    $c['email'] ?? ('Customer #'.$c['customer_id']),
+                    $c['customer_id'],
+                    $c['first_one_time_at'],
+                    $c['last_one_time_at'],
+                    $c['one_time_orders'],
+                    $c['one_time_spend'],
+                    $c['subscribed_at'],
+                    $c['days_to_convert'] ?? '',
+                    $c['subscription_id'],
+                    $c['subscription_status'],
+                    $c['subscriptions'],
+                    $c['subscription_orders'],
+                    $c['subscription_spend'],
+                    $c['is_conversion'] ? 'yes' : 'no',
+                ]);
+            }
+        }, 'hurayra-one-time-to-subscription.csv', ['Content-Type' => 'text/csv']);
+    }
+
     /** AJAX endpoint: cohort retention matrix (sign-up month × renewal months). */
     public function cohorts(Request $request): JsonResponse
     {

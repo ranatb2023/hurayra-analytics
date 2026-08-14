@@ -122,6 +122,25 @@ All order metrics are **cohort** (events in the window).
 - **Revenue / customer** — completed revenue ÷ unique customers.
 - **Top customers** — lifetime completed spend, ranked.
 
+### One-time → Subscription (upsell list)
+The named list of customers who **bought a one-off product first and later took out a subscription**, with **both dates**: the first one-time order and the sign-up date of the subscription that followed it.
+
+| Column | Meaning |
+| --- | --- |
+| Customer | Billing email (or `Customer #id` when the export has no email) |
+| One-time order | Date of their **first** one-time order (`order_relationship = one_time`) |
+| Orders / One-time spend | How many one-time orders, and the **completed** total |
+| Subscribed on | `date_created_gmt` of the first subscription starting **on/after** that one-time order |
+| Gap | Days between the two — the time it took to convert |
+| Sub status | Current status of that subscription |
+| Sub spend | Lifetime **completed** parent + renewal revenue for that customer |
+
+- **Identity** is the **billing email** (it's on both orders and subscriptions, and unique per guest), falling back to `customer_id` when a row has no email. `customer_id = 0` is WooCommerce's guest marker and is never used as an identity — every guest shares it.
+- **Two toggles**: *Subscription after the one-time order* (on by default — the true conversion; switch it off to also list customers who subscribed **first** and bought one-off later, flagged “subscribed first”) and *Completed one-time orders only* (off by default, matching the **One-time Purchase** card which counts every status).
+- Headline stats above the table: converted customers, **conversion rate** (of all one-time buyers), average time to convert, and the subscription revenue those customers went on to generate.
+- The list is **lifetime** — it ignores the dashboard's date filter, so it's the full list. The table renders 25 rows at a time (*Show more*, plus a search box); **Export CSV** gives every row.
+- Endpoints: `GET /api/metrics/one-time-to-subscription` (`conversions_only`, `completed_only`, `limit`) and `.../export` for the CSV.
+
 ### Cohort retention
 Of the subscribers who signed up in month *M*, the % with a completed order (parent or renewal) in month *M+k*, for k = 0…6. Rendered as a heatmap (M0 = sign-up month).
 

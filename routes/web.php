@@ -14,6 +14,8 @@ Route::get('/api/metrics/trend', [MetricsController::class, 'trend'])->name('met
 Route::get('/api/metrics/sparklines', [MetricsController::class, 'sparklines'])->name('metrics.sparklines');
 Route::get('/api/metrics/top-customers', [MetricsController::class, 'topCustomers'])->name('metrics.top_customers');
 Route::get('/api/metrics/cohorts', [MetricsController::class, 'cohorts'])->name('metrics.cohorts');
+Route::get('/api/metrics/one-time-to-subscription', [MetricsController::class, 'oneTimeToSubscription'])->name('metrics.one_time_to_subscription');
+Route::get('/api/metrics/one-time-to-subscription/export', [MetricsController::class, 'oneTimeToSubscriptionExport'])->name('metrics.one_time_to_subscription.export');
 Route::get('/api/metrics/export', [MetricsController::class, 'export'])->name('metrics.export');
 Route::get('/report/client', [MetricsController::class, 'clientReport'])->name('report.client');
 

@@ -278,6 +278,145 @@
         </div>
     </div>
 
+    {{-- ============ One-time buyers who then subscribed ============ --}}
+    @include('dashboard.partials.section-heading', ['title' => 'One-time → Subscription', 'bar' => 'from-sky-400 to-indigo-500'])
+    <div class="print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm">
+        <div class="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 p-5">
+            <div class="min-w-0">
+                <h3 class="text-sm font-bold text-slate-700">
+                    Customers who bought one-off first, then subscribed
+                    <span class="font-medium text-slate-400">· all time</span>
+                </h3>
+                <p class="mt-1 text-xs text-slate-500">
+                    Matched on billing email (falling back to customer ID). Shows the first one-time order date and the
+                    sign-up date of the subscription they took out afterwards.
+                </p>
+            </div>
+            <div class="no-print flex shrink-0 items-center gap-2">
+                <span x-show="upsellLoading" x-cloak class="text-xs text-slate-400">loading…</span>
+                <a :href="upsellExportHref()"
+                   class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50">
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
+                    Export CSV
+                </a>
+            </div>
+        </div>
+
+        {{-- Headline numbers --}}
+        <div class="grid grid-cols-2 gap-px border-b border-slate-100 bg-slate-100 lg:grid-cols-4">
+            @php
+                $upsellStats = [
+                    ['Converted customers', "new Intl.NumberFormat().format(upsell.summary.converted || 0)", 'of <span x-text="new Intl.NumberFormat().format(upsell.summary.one_time_customers || 0)"></span> one-time buyers'],
+                    ['Conversion rate', "upsell.summary.conversion_rate === null || upsell.summary.conversion_rate === undefined ? '—' : upsell.summary.conversion_rate + '%'", 'one-time buyers who later subscribed'],
+                    ['Avg time to convert', "daysLabel(upsell.summary.avg_days_to_convert)", 'first one-time order → sign-up'],
+                    ['Subscription revenue', "money(upsell.summary.subscription_revenue || 0)", 'completed subscription orders, lifetime'],
+                ];
+            @endphp
+            @foreach ($upsellStats as [$label, $expr, $sub])
+                <div class="bg-white p-5">
+                    <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{{ $label }}</p>
+                    <p class="mt-1 text-2xl font-bold tracking-tight text-slate-900" x-text="{{ $expr }}"></p>
+                    <p class="mt-0.5 text-xs text-slate-400">{!! $sub !!}</p>
+                </div>
+            @endforeach
+        </div>
+
+        {{-- Controls --}}
+        <div class="no-print flex flex-wrap items-center gap-4 border-b border-slate-100 p-4">
+            <div class="relative min-w-56 flex-1">
+                <svg class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+                <input type="search" x-model="upsellSearch" placeholder="Search email, customer or subscription ID…"
+                       class="w-full rounded-lg border-slate-300 py-1.5 pl-9 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <label class="inline-flex cursor-pointer items-center gap-2.5 text-sm font-medium text-slate-600">
+                <span>Subscription after the one-time order</span>
+                <span class="relative">
+                    <input type="checkbox" x-model="upsellConversionsOnly" @change="fetchUpsell()" class="peer sr-only">
+                    <span class="block h-5 w-9 rounded-full bg-slate-300 transition peer-checked:bg-indigo-600"></span>
+                    <span class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition peer-checked:translate-x-4"></span>
+                </span>
+            </label>
+            <label class="inline-flex cursor-pointer items-center gap-2.5 text-sm font-medium text-slate-600">
+                <span>Completed one-time orders only</span>
+                <span class="relative">
+                    <input type="checkbox" x-model="upsellCompletedOnly" @change="fetchUpsell()" class="peer sr-only">
+                    <span class="block h-5 w-9 rounded-full bg-slate-300 transition peer-checked:bg-emerald-500"></span>
+                    <span class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition peer-checked:translate-x-4"></span>
+                </span>
+            </label>
+        </div>
+
+        {{-- The list --}}
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-50/80 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <tr>
+                        <th class="px-5 py-2.5">Customer</th>
+                        <th class="px-3 py-2.5">One-time order</th>
+                        <th class="px-3 py-2.5 text-right">Orders</th>
+                        <th class="px-3 py-2.5 text-right">One-time spend</th>
+                        <th class="px-3 py-2.5">Subscribed on</th>
+                        <th class="px-3 py-2.5 text-right">Gap</th>
+                        <th class="px-3 py-2.5">Sub status</th>
+                        <th class="px-5 py-2.5 text-right">Sub spend</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    <template x-for="(c, i) in upsellVisible()" :key="c.key">
+                        <tr class="transition hover:bg-slate-50/70">
+                            <td class="px-5 py-2.5">
+                                <div class="flex items-center gap-2">
+                                    <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-[11px] font-bold text-indigo-600" x-text="i + 1"></span>
+                                    <div class="min-w-0">
+                                        <p class="truncate font-medium text-slate-700" x-text="c.email || ('Customer #' + c.customer_id)"></p>
+                                        <p class="text-[11px] text-slate-400">
+                                            <span x-show="c.customer_id">ID <span x-text="c.customer_id"></span> · </span>
+                                            <span>sub #<span x-text="c.subscription_id"></span></span>
+                                            <span x-show="!c.is_conversion" class="ml-1 font-semibold text-amber-600">subscribed first</span>
+                                        </p>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="whitespace-nowrap px-3 py-2.5 text-slate-600" x-text="dateLabel(c.first_one_time_at)"></td>
+                            <td class="px-3 py-2.5 text-right tabular-nums text-slate-600" x-text="c.one_time_orders"></td>
+                            <td class="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-600" x-text="money(c.one_time_spend)"></td>
+                            <td class="whitespace-nowrap px-3 py-2.5 font-medium text-slate-700" x-text="dateLabel(c.subscribed_at)"></td>
+                            <td class="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-500" x-text="daysLabel(c.days_to_convert)"></td>
+                            <td class="px-3 py-2.5">
+                                <span class="inline-flex rounded-md px-2 py-0.5 text-xs font-semibold capitalize"
+                                      :class="subStatusClass(c.subscription_status)" x-text="c.subscription_status"></span>
+                            </td>
+                            <td class="whitespace-nowrap px-5 py-2.5 text-right font-semibold tabular-nums text-slate-900" x-text="money(c.subscription_spend)"></td>
+                        </tr>
+                    </template>
+                    <template x-if="!upsellLoading && upsellMatches().length === 0">
+                        <tr>
+                            <td colspan="8" class="px-5 py-8 text-center text-sm text-slate-400">
+                                No customer bought a one-time product and then subscribed
+                                <span x-show="upsellSearch">matching “<span x-text="upsellSearch"></span>”</span>.
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-3 text-xs text-slate-400">
+            <span>
+                Showing <span class="font-semibold text-slate-600" x-text="upsellVisible().length"></span>
+                of <span class="font-semibold text-slate-600" x-text="upsellMatches().length"></span>
+                <span x-show="upsell.total > upsell.rows.length">
+                    (<span x-text="new Intl.NumberFormat().format(upsell.total)"></span> in total — export the CSV for the full list)
+                </span>
+            </span>
+            <button class="no-print rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                    x-show="upsellShown < upsellMatches().length" x-cloak
+                    @click="upsellShown += 50">
+                Show more
+            </button>
+        </div>
+    </div>
+
     {{-- Breakdown donuts: revenue split + subscription status mix --}}
     <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         {{-- Revenue split --}}

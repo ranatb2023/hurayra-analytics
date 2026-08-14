@@ -375,6 +375,149 @@ class MetricsService
         return ['offsets' => range(0, $maxOffset), 'rows' => $rows];
     }
 
+    /**
+     * Customers who bought a one-off product first and later took out a
+     * subscription — the upsell journey, with both dates.
+     *
+     * Identity is the **billing email** (present on both orders and
+     * subscriptions, and unique per guest), falling back to `customer_id` when
+     * an email is missing. `customer_id = 0` is WooCommerce's guest marker and
+     * is never used as an identity — every guest shares it.
+     *
+     * Spend columns always sum **completed** orders only, whatever the
+     * `$completedOnly` switch does to the counting.
+     *
+     * @param  bool  $conversionsOnly  keep only customers whose subscription started on/after their first one-time order
+     * @param  bool  $completedOnly  treat only completed one-time orders as a purchase
+     * @param  int  $limit  max rows returned (0 = all); the summary always counts everything
+     * @return array{customers: array<int, array<string, mixed>>, summary: array<string, mixed>, total: int}
+     */
+    public function oneTimeToSubscription(bool $conversionsOnly = true, bool $completedOnly = false, int $limit = 0): array
+    {
+        $key = $this->customerKeyExpr();
+
+        // One-time orders, aggregated per customer.
+        $oneTime = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('order_relationship', 'one_time')
+            ->whereNotNull('date_created_gmt')
+            ->whereRaw("({$key}) IS NOT NULL")
+            ->when($completedOnly, fn (Builder $q) => $q->where('status', 'completed'))
+            ->selectRaw("{$key} as ckey")
+            ->selectRaw('MIN(date_created_gmt) as first_at, MAX(date_created_gmt) as last_at, COUNT(*) as orders')
+            ->selectRaw("SUM(CASE WHEN status = 'completed' THEN total_amount ELSE 0 END) as spend")
+            ->selectRaw('MAX(billing_email) as email, MAX(customer_id) as customer_id')
+            ->groupBy(DB::raw($key))
+            ->get()
+            ->keyBy('ckey');
+
+        // Every subscription row, oldest first, bucketed per customer — we need
+        // the individual sign-up dates, not an aggregate, to pick the first
+        // subscription that follows the one-time order.
+        $subs = DB::table('records')
+            ->where('record_type', 'shop_subscription')
+            ->whereNotNull('date_created_gmt')
+            ->whereRaw("({$key}) IS NOT NULL")
+            ->selectRaw("{$key} as ckey, id, status, date_created_gmt, billing_email")
+            ->orderBy('date_created_gmt')
+            ->get()
+            ->groupBy('ckey');
+
+        // Lifetime subscription revenue (completed parent + renewal orders).
+        $subRevenue = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->whereIn('order_relationship', self::SUBSCRIPTION_PURCHASE_RELS)
+            ->where('status', 'completed')
+            ->whereRaw("({$key}) IS NOT NULL")
+            ->selectRaw("{$key} as ckey, COUNT(*) as orders, SUM(total_amount) as spend")
+            ->groupBy(DB::raw($key))
+            ->get()
+            ->keyBy('ckey');
+
+        $rows = [];
+        $converted = 0;
+        $daysTotal = 0;
+        $daysCount = 0;
+
+        foreach ($oneTime as $ckey => $ot) {
+            $customerSubs = $subs[$ckey] ?? null;
+            if ($customerSubs === null || $customerSubs->isEmpty()) {
+                continue; // never subscribed
+            }
+
+            $firstOneTime = (string) $ot->first_at;
+
+            // First subscription taken out on/after the first one-time order.
+            $sub = null;
+            foreach ($customerSubs as $candidate) {
+                if ((string) $candidate->date_created_gmt >= $firstOneTime) {
+                    $sub = $candidate;
+                    break;
+                }
+            }
+
+            $isConversion = $sub !== null;
+
+            if (! $isConversion) {
+                if ($conversionsOnly) {
+                    continue; // subscribed before ever buying one-off
+                }
+                $sub = $customerSubs->first();
+            }
+
+            $days = $isConversion
+                ? (int) floor((strtotime((string) $sub->date_created_gmt) - strtotime($firstOneTime)) / 86400)
+                : null;
+
+            if ($isConversion) {
+                $converted++;
+                $daysTotal += $days;
+                $daysCount++;
+            }
+
+            $revenue = $subRevenue[$ckey] ?? null;
+
+            $rows[] = [
+                'key' => (string) $ckey,
+                'email' => $ot->email ?: ($sub->billing_email ?: null),
+                'customer_id' => (int) $ot->customer_id ?: null,
+                'first_one_time_at' => $firstOneTime,
+                'last_one_time_at' => (string) $ot->last_at,
+                'one_time_orders' => (int) $ot->orders,
+                'one_time_spend' => round((float) $ot->spend, 2),
+                'subscription_id' => (int) $sub->id,
+                'subscribed_at' => (string) $sub->date_created_gmt,
+                'subscription_status' => (string) $sub->status,
+                'subscriptions' => $customerSubs->count(),
+                'subscription_orders' => (int) ($revenue->orders ?? 0),
+                'subscription_spend' => round((float) ($revenue->spend ?? 0), 2),
+                'days_to_convert' => $days,
+                'is_conversion' => $isConversion,
+            ];
+        }
+
+        // Most recent subscription first.
+        usort($rows, fn ($a, $b) => strcmp($b['subscribed_at'], $a['subscribed_at']));
+
+        $oneTimeCustomers = $oneTime->count();
+
+        $summary = [
+            'one_time_customers' => $oneTimeCustomers,
+            'converted' => $converted,
+            'listed' => count($rows),
+            'conversion_rate' => $oneTimeCustomers > 0 ? round($converted / $oneTimeCustomers * 100, 1) : null,
+            'avg_days_to_convert' => $daysCount > 0 ? (int) round($daysTotal / $daysCount) : null,
+            'one_time_revenue' => round(array_sum(array_column($rows, 'one_time_spend')), 2),
+            'subscription_revenue' => round(array_sum(array_column($rows, 'subscription_spend')), 2),
+        ];
+
+        return [
+            'customers' => $limit > 0 ? array_slice($rows, 0, $limit) : $rows,
+            'summary' => $summary,
+            'total' => count($rows),
+        ];
+    }
+
     private function monthDiff(string $from, string $to): int
     {
         [$fy, $fm] = array_map('intval', explode('-', $from));
@@ -406,6 +549,20 @@ class MetricsService
             ->where('status', $status)
             ->where('date_created_gmt', '<', $end)
             ->count();
+    }
+
+    /**
+     * Driver-aware "who is this customer" key, shared by orders and
+     * subscriptions: the billing email, or `cid:<customer_id>` when there is no
+     * email. Guests (customer_id 0) and rows with neither yield NULL.
+     */
+    private function customerKeyExpr(): string
+    {
+        $concat = DB::connection()->getDriverName() === 'sqlite'
+            ? "('cid:' || customer_id)"
+            : "CONCAT('cid:', customer_id)";
+
+        return "COALESCE(NULLIF(billing_email, ''), CASE WHEN customer_id > 0 THEN {$concat} END)";
     }
 
     /** Correlated subquery: a completed order linked to the outer subscription. */
