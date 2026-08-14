@@ -396,18 +396,22 @@ class MetricsService
     {
         $key = $this->customerKeyExpr();
 
-        // One-time orders, aggregated per customer.
-        $oneTime = DB::table('records')
+        // One-time orders, aggregated per customer. The key is computed in a
+        // derived table so the GROUP BY is on a plain column — grouping by the
+        // raw expression trips MySQL's ONLY_FULL_GROUP_BY.
+        $oneTimeRows = DB::table('records')
             ->where('record_type', 'shop_order')
             ->where('order_relationship', 'one_time')
             ->whereNotNull('date_created_gmt')
-            ->whereRaw("({$key}) IS NOT NULL")
             ->when($completedOnly, fn (Builder $q) => $q->where('status', 'completed'))
-            ->selectRaw("{$key} as ckey")
-            ->selectRaw('MIN(date_created_gmt) as first_at, MAX(date_created_gmt) as last_at, COUNT(*) as orders')
+            ->selectRaw("{$key} as ckey, date_created_gmt, status, total_amount, billing_email, customer_id");
+
+        $oneTime = DB::query()->fromSub($oneTimeRows, 'ot')
+            ->whereNotNull('ckey')
+            ->selectRaw('ckey, MIN(date_created_gmt) as first_at, MAX(date_created_gmt) as last_at, COUNT(*) as orders')
             ->selectRaw("SUM(CASE WHEN status = 'completed' THEN total_amount ELSE 0 END) as spend")
             ->selectRaw('MAX(billing_email) as email, MAX(customer_id) as customer_id')
-            ->groupBy(DB::raw($key))
+            ->groupBy('ckey')
             ->get()
             ->keyBy('ckey');
 
@@ -424,13 +428,16 @@ class MetricsService
             ->groupBy('ckey');
 
         // Lifetime subscription revenue (completed parent + renewal orders).
-        $subRevenue = DB::table('records')
+        $subOrderRows = DB::table('records')
             ->where('record_type', 'shop_order')
             ->whereIn('order_relationship', self::SUBSCRIPTION_PURCHASE_RELS)
             ->where('status', 'completed')
-            ->whereRaw("({$key}) IS NOT NULL")
-            ->selectRaw("{$key} as ckey, COUNT(*) as orders, SUM(total_amount) as spend")
-            ->groupBy(DB::raw($key))
+            ->selectRaw("{$key} as ckey, total_amount");
+
+        $subRevenue = DB::query()->fromSub($subOrderRows, 'so')
+            ->whereNotNull('ckey')
+            ->selectRaw('ckey, COUNT(*) as orders, SUM(total_amount) as spend')
+            ->groupBy('ckey')
             ->get()
             ->keyBy('ckey');
 

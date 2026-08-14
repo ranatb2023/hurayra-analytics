@@ -35,6 +35,7 @@ export default (config = {}) => ({
     // One-time buyers who later subscribed (lifetime, independent of the filter).
     upsell: { rows: [], summary: {}, total: 0 },
     upsellLoading: false,
+    upsellError: null,
     upsellConversionsOnly: true,   // subscription must start on/after the one-time order
     upsellCompletedOnly: false,    // count only completed one-time orders
     upsellSearch: '',
@@ -178,18 +179,23 @@ export default (config = {}) => ({
 
     async fetchUpsell() {
         this.upsellLoading = true;
+        this.upsellError = null;
         try {
             const p = this.upsellParams();
             p.set('limit', '500');
             const res = await fetch(`/api/metrics/one-time-to-subscription?${p.toString()}`, {
                 headers: { Accept: 'application/json' },
             });
-            if (res.ok) {
-                const data = await res.json();
-                this.upsell = { rows: data.customers ?? [], summary: data.summary ?? {}, total: data.total ?? 0 };
-                this.upsellShown = 25;
-            }
-        } catch (_) { /* non-critical panel */ } finally {
+            // Never fall back to an empty list on failure — a silent 0 reads as
+            // "nobody converted", which is a very different claim.
+            if (!res.ok) throw new Error(`Could not load the list (HTTP ${res.status}).`);
+            const data = await res.json();
+            this.upsell = { rows: data.customers ?? [], summary: data.summary ?? {}, total: data.total ?? 0 };
+            this.upsellShown = 25;
+        } catch (e) {
+            this.upsellError = e.message ?? 'Could not load the list.';
+            this.upsell = { rows: [], summary: {}, total: 0 };
+        } finally {
             this.upsellLoading = false;
         }
     },

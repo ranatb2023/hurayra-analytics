@@ -302,6 +302,13 @@
             </div>
         </div>
 
+        <template x-if="upsellError">
+            <div class="border-b border-rose-100 bg-rose-50 px-5 py-3 text-sm text-rose-700">
+                <span class="font-semibold">Couldn’t load this list.</span>
+                <span x-text="upsellError"></span>
+            </div>
+        </template>
+
         {{-- Headline numbers --}}
         <div class="grid grid-cols-2 gap-px border-b border-slate-100 bg-slate-100 lg:grid-cols-4">
             @php
@@ -389,7 +396,7 @@
                             <td class="whitespace-nowrap px-5 py-2.5 text-right font-semibold tabular-nums text-slate-900" x-text="money(c.subscription_spend)"></td>
                         </tr>
                     </template>
-                    <template x-if="!upsellLoading && upsellMatches().length === 0">
+                    <template x-if="!upsellLoading && !upsellError && upsellMatches().length === 0">
                         <tr>
                             <td colspan="8" class="px-5 py-8 text-center text-sm text-slate-400">
                                 No customer bought a one-time product and then subscribed
