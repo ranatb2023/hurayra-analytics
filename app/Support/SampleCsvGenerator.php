@@ -10,17 +10,18 @@ use App\Services\CsvImportService;
  * `wc-` prefix and a few rows are intentionally messy (blank totals, a bad
  * date, a missing id) to exercise normalisation and the skip path.
  *
- * It also emits a `customer_id` column (an "extra" column beyond the required
- * set) so customer-level analytics have data and the superset-header path is
- * exercised. Customers are shared between subscriptions and one-time orders to
- * create realistic repeat / returning behaviour.
+ * It also emits `customer_id` and `ended_at` columns (both "extra" columns
+ * beyond the required set) so customer-level analytics and the point-in-time
+ * subscriber history have data, and the superset-header path is exercised.
+ * Customers are shared between subscriptions and one-time orders to create
+ * realistic repeat / returning behaviour.
  */
 class SampleCsvGenerator
 {
-    /** The header written: required columns + the optional customer_id. */
+    /** The header written: required columns + the optional extras. */
     private function header(): array
     {
-        return array_merge(CsvImportService::EXPECTED_COLUMNS, ['customer_id']);
+        return array_merge(CsvImportService::EXPECTED_COLUMNS, ['customer_id', 'ended_at']);
     }
 
     /** Write the CSV to $path and return the number of data rows written. */
@@ -65,13 +66,20 @@ class SampleCsvGenerator
             $status = $subStatuses[array_rand($subStatuses)];
             $date = $this->randomDateIn($months[array_rand($months)]);
 
+            // Ended subscriptions get an end date 1–10 months after sign-up, so
+            // the point-in-time history has something real to work with. A few
+            // are deliberately left blank to exercise the last-order fallback.
+            $endedAt = in_array($status, ['cancelled', 'expired'], true) && mt_rand(1, 10) <= 8
+                ? $this->monthsAfter($date, mt_rand(1, 10))
+                : '';
+
             $rows[] = [$subId, 'shop_subscription', 'wc-'.$status, $date,
-                number_format(mt_rand(900, 4900) / 100, 2, '.', ''), '', 'subscription', "user{$cust}@example.com", $cust];
+                number_format(mt_rand(900, 4900) / 100, 2, '.', ''), '', 'subscription', "user{$cust}@example.com", $cust, $endedAt];
 
             // Parent order (most are completed).
             $parentStatus = mt_rand(1, 10) <= 8 ? 'completed' : 'failed';
             $rows[] = [$nextId++, 'shop_order', 'wc-'.$parentStatus, $date,
-                number_format(mt_rand(900, 4900) / 100, 2, '.', ''), $subId, 'parent', "user{$cust}@example.com", $cust];
+                number_format(mt_rand(900, 4900) / 100, 2, '.', ''), $subId, 'parent', "user{$cust}@example.com", $cust, ''];
 
             // 0–6 renewals over later months.
             $renewals = mt_rand(0, 6);
@@ -82,7 +90,7 @@ class SampleCsvGenerator
                     default => 'failed',
                 };
                 $rows[] = [$nextId++, 'shop_order', 'wc-'.$renewalStatus, $this->randomDateIn($months[array_rand($months)]),
-                    number_format(mt_rand(900, 4900) / 100, 2, '.', ''), $subId, 'renewal', "user{$cust}@example.com", $cust];
+                    number_format(mt_rand(900, 4900) / 100, 2, '.', ''), $subId, 'renewal', "user{$cust}@example.com", $cust, ''];
             }
         }
 
@@ -92,13 +100,13 @@ class SampleCsvGenerator
             $status = $oneTimeStatuses[array_rand($oneTimeStatuses)];
             $cust = $customer($i * 7 + 3); // overlaps the subscriber pool -> returning customers
             $rows[] = [$nextId++, 'shop_order', 'wc-'.$status, $this->randomDateIn($months[array_rand($months)]),
-                number_format(mt_rand(500, 9900) / 100, 2, '.', ''), '', 'one_time', "user{$cust}@example.com", $cust];
+                number_format(mt_rand(500, 9900) / 100, 2, '.', ''), '', 'one_time', "user{$cust}@example.com", $cust, ''];
         }
 
         // ---- A few intentionally messy rows ----
-        $rows[] = [$nextId++, 'shop_order', 'wc-completed', '2026-03-15 10:00:00', '', '', 'one_time', '  MixedCase@Example.com ', 2007]; // blank total -> 0
-        $rows[] = [$nextId++, 'shop_order', 'wc-completed', 'not-a-date', '49.00', '', 'one_time', 'guest@example.com', 2011];               // bad date -> null
-        $rows[] = ['', 'shop_order', 'wc-completed', '2026-03-15 10:00:00', '49.00', '', 'one_time', 'guest@example.com', 2011];             // missing id -> skipped
+        $rows[] = [$nextId++, 'shop_order', 'wc-completed', '2026-03-15 10:00:00', '', '', 'one_time', '  MixedCase@Example.com ', 2007, '']; // blank total -> 0
+        $rows[] = [$nextId++, 'shop_order', 'wc-completed', 'not-a-date', '49.00', '', 'one_time', 'guest@example.com', 2011, ''];               // bad date -> null
+        $rows[] = ['', 'shop_order', 'wc-completed', '2026-03-15 10:00:00', '49.00', '', 'one_time', 'guest@example.com', 2011, ''];             // missing id -> skipped
 
         return $rows;
     }
@@ -115,6 +123,12 @@ class SampleCsvGenerator
         }
 
         return $out;
+    }
+
+    /** Shift a "Y-m-d H:i:s" stamp forward by whole months, day/time preserved. */
+    private function monthsAfter(string $date, int $months): string
+    {
+        return date('Y-m-d H:i:s', strtotime("+{$months} months", strtotime($date)));
     }
 
     private function randomDateIn(string $ym): string

@@ -119,6 +119,49 @@ class CsvImportServiceTest extends TestCase
         @unlink($path);
     }
 
+    public function test_end_date_column_is_read_for_ended_subscriptions_only(): void
+    {
+        // `date_cancelled_gmt` is one of the optional end-date spellings.
+        $header = array_merge(CsvImportService::EXPECTED_COLUMNS, ['date_cancelled_gmt']);
+        $path = tempnam(sys_get_temp_dir(), 'csv_').'.csv';
+        $fh = fopen($path, 'w');
+        fputcsv($fh, $header);
+        // Cancelled subscription: the end date is kept.
+        fputcsv($fh, ['601', 'shop_subscription', 'wc-cancelled', '2026-01-10 00:00:00', '20.00', '', 'subscription', 'a@example.com', '2026-06-20 09:00:00']);
+        // Live subscription: a stray stamp is NOT an end date.
+        fputcsv($fh, ['602', 'shop_subscription', 'wc-active', '2026-01-11 00:00:00', '20.00', '', 'subscription', 'b@example.com', '2026-06-21 09:00:00']);
+        // Orders never carry one.
+        fputcsv($fh, ['603', 'shop_order', 'wc-completed', '2026-01-12 00:00:00', '20.00', '601', 'renewal', 'a@example.com', '2026-06-22 09:00:00']);
+        // An end date before sign-up is clamped to the sign-up date.
+        fputcsv($fh, ['604', 'shop_subscription', 'wc-expired', '2026-02-01 00:00:00', '20.00', '', 'subscription', 'c@example.com', '2025-12-01 09:00:00']);
+        fclose($fh);
+
+        $import = Import::create(['original_filename' => 'ends.csv', 'status' => 'processing']);
+        $this->service->import($import, $path);
+
+        $this->assertSame('2026-06-20 09:00:00', Record::find(601)->ended_at->toDateTimeString());
+        $this->assertNull(Record::find(602)->ended_at);
+        $this->assertNull(Record::find(603)->ended_at);
+        $this->assertSame('2026-02-01 00:00:00', Record::find(604)->ended_at->toDateTimeString());
+
+        @unlink($path);
+    }
+
+    public function test_end_date_is_optional(): void
+    {
+        // The canonical header has no end-date column at all.
+        $path = $this->makeCsv([
+            ['700', 'shop_subscription', 'wc-cancelled', '2026-01-10 00:00:00', '20.00', '', 'subscription', 'a@example.com'],
+        ]);
+
+        $import = Import::create(['original_filename' => 'plain.csv', 'status' => 'processing']);
+        $this->service->import($import, $path);
+
+        $this->assertNull(Record::find(700)->ended_at);
+
+        @unlink($path);
+    }
+
     /** Write a temporary CSV with the canonical header + given rows; return its path. */
     private function makeCsv(array $rows): string
     {

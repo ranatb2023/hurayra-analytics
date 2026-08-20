@@ -18,6 +18,7 @@ class Record extends Model
         'record_type',
         'status',
         'date_created_gmt',
+        'ended_at',
         'total_amount',
         'subscription_id',
         'customer_id',
@@ -27,6 +28,7 @@ class Record extends Model
 
     protected $casts = [
         'date_created_gmt' => 'datetime',
+        'ended_at' => 'datetime',
         'total_amount' => 'decimal:2',
         'subscription_id' => 'integer',
         'customer_id' => 'integer',
@@ -40,6 +42,13 @@ class Record extends Model
     public const ORDER_STATUSES = ['completed', 'cancelled', 'failed', 'refunded', 'pending', 'processing'];
 
     public const SUBSCRIPTION_STATUSES = ['active', 'on-hold', 'cancelled', 'pending-cancel', 'expired', 'pending'];
+
+    /**
+     * Statuses that mean the subscription has left the lifecycle for good.
+     * These are the only ones for which `ended_at` is meaningful — everything
+     * else is still running, so it has no end date yet.
+     */
+    public const TERMINAL_SUBSCRIPTION_STATUSES = ['cancelled', 'expired'];
 
     public const ORDER_RELATIONSHIPS = ['subscription', 'parent', 'renewal', 'one_time'];
 

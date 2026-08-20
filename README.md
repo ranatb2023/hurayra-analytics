@@ -60,6 +60,27 @@ id, record_type, status, date_created_gmt, total_amount, subscription_id, order_
 | `order_relationship` | `subscription` \| `parent` \| `renewal` \| `one_time`. Separates subscription orders from one-time orders. |
 | `billing_email` | Trimmed + lowercased on import. |
 
+#### Optional: the subscription end date
+
+`status` is a **live** value — every import overwrites it, and it carries no
+history. On its own it can only answer "who is active *today*", which makes past
+months shrink every time somebody cancels (see
+[Point-in-time subscribers](#point-in-time-subscribers)).
+
+Include an end date in the export and that stops. Any **one** of these column
+names is picked up, in this order — the first one present in the header wins:
+
+```
+ended_at, date_cancelled_gmt, cancelled_date, date_ended_gmt, end_date,
+schedule_end, schedule_cancelled, date_modified_gmt, date_updated_gmt
+```
+
+It is read **only** for `shop_subscription` rows in a terminal status
+(`cancelled` / `expired`) — for a live subscription a "last modified" stamp is
+not an end date — and a value earlier than the sign-up date is clamped to it.
+The column is entirely optional: without it the app falls back to each
+subscription's last linked order (see below).
+
 ### Import behaviour
 - **Streamed** line-by-line via `SplFileObject` (never loads the whole file into memory), upserted in chunks of 500.
 - **Normalised**: `wc-` stripped from status, emails trimmed/lowercased, dates parsed defensively (`0000-00-00` and junk → `null`), blank/NaN numerics → `0`.
@@ -74,16 +95,43 @@ Every metric respects the active date filter on `date_created_gmt`. Two time
 semantics are used (confirmed with the product owner):
 
 - **Cohort** — events inside the window: `start ≤ date_created_gmt < end`.
-- **Snapshot** — current status as of the period **end**: `date_created_gmt < end`,
-  sign-up lower bound ignored. Answers “how many are in state X right now”.
+- **Point-in-time** — the state a subscription was in at the period **end**, not
+  the state it is in today. Sign-up lower bound ignored. See below.
+
+### Point-in-time subscribers
+
+A subscriber count for a past month has to stay put. If March said 412 active
+subscribers, it must still say 412 next year — customers who cancelled in June
+were genuinely subscribed in March, and taking them back out rewrites history.
+
+Counting `status = 'active'` does exactly that rewriting, so subscription
+counts are resolved against an **end date** instead. A subscription is active at
+instant `T` when:
+
+```
+date_created_gmt < T  AND  ( status = 'active'  OR  ( status is cancelled/expired  AND  end ≥ T ) )
+```
+
+`end` is the imported [`ended_at`](#optional-the-subscription-end-date) when the
+CSV carries one, and otherwise **the date of the subscription's last linked
+order** — the most recent point we can prove it was still being billed. The
+fallback is an approximation: it can place a cancellation up to one billing
+cycle early, so the dashboard shows what share of ended subscriptions have a real
+end date and nudges you to add the column. Everything below is exact once it is
+there.
+
+`on-hold`, `pending` and `pending-cancel` are live states with no history in the
+source data, so they are still read as-is and keep their own cards. A
+subscription sitting in `pending-cancel` has not cancelled yet, so once it does,
+the months before its end correctly show it as active.
 
 ### Subscriptions (`record_type = shop_subscription`)
 | # | Metric | Definition | Semantics |
 | --- | --- | --- | --- |
 | 1 | **New Subscribers** | subscription rows created in the period | cohort |
-| 2 | **Subscribers Count** | status `active` | snapshot |
-| 3 | **Pending Cancellation** | status `pending-cancel` | snapshot |
-| 4 | **On Hold** | status `on-hold` | snapshot |
+| 2 | **Subscribers Count** | active at the period end — still running, or ended on/after it | point-in-time |
+| 3 | **Pending Cancellation** | status `pending-cancel` | live status |
+| 4 | **On Hold** | status `on-hold` | live status |
 | 5 | **Cancelled without Purchase** | signed up in the period, status `cancelled`, **and 0** linked order rows with status `completed` | cohort + lifetime link |
 | 6 | **Cancelled with Purchase** | signed up in the period, status `cancelled`, **and ≥1** linked completed order | cohort + lifetime link |
 
@@ -111,10 +159,12 @@ All order metrics are **cohort** (events in the window).
 - **Revenue split** — subscription (`parent`+`renewal`) vs one-time, over completed orders.
 
 ### Retention & churn
-- **Churn rate** — (cancelled + expired) ÷ all subscriptions (snapshot).
+- **Monthly churn rate** — subscribers who **left during** the period ÷ subscribers **active when it opened**. A flow, so it moves month to month. `null` when nobody was active at the start (no base to lose from).
+- **Lifetime churn rate** — (cancelled + expired) ÷ all subscriptions, as of the period end. A cumulative ratio that only ever climbs; kept for continuity.
 - **Renewal success rate** — completed renewals ÷ all renewal orders in the period.
 - **Failed renewals** / **Revenue at risk** — count and `SUM(total_amount)` of `failed`/`pending` renewal orders in the period (recoverable, involuntary churn).
-- **Subscription status mix** — snapshot donut across all six subscription statuses.
+- **Subscription status mix** — point-in-time donut across all six subscription statuses.
+- **Subscriber history** (`GET /api/metrics/churn?months=12`) — a row per calendar month with *active at start*, *new*, *churned*, *active at end* and the churn rate. Every figure comes from sign-up and end dates, so a closed month's row never changes; a cancellation in June moves June's row and nothing before it. Also appended to the metrics CSV export.
 
 ### Customers (needs the `customer_id` column)
 - **Unique / New / Returning customers** — distinct `customer_id` on orders in the period; *new* = first-ever order falls in the period.
@@ -227,5 +277,6 @@ Revenue (£), Conversions, Subscribers**.
 The metrics logic is isolated from controllers (`MetricsService` is pure — no
 request/session access) and covered by feature tests with a fully enumerated
 dataset, so the numbers are provably correct.
-#   h u r a y r a - a n a l y t i c s  
+#   h u r a y r a - a n a l y t i c s 
+ 
  

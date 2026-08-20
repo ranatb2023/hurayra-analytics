@@ -21,6 +21,13 @@
         ['Cancelled · No Purchase', $m['cancelled_without_purchase']],
         ['Cancelled · Purchased', $m['cancelled_with_purchase']],
     ];
+    $pct = fn ($v) => $v === null ? '—' : $v.'%';
+    $retentionRows = [
+        ['Monthly Churn Rate', $pct($m['monthly_churn_rate'] ?? null)],
+        ['Subscribers Lost', number_format($m['churned_in_period'] ?? 0)],
+        ['Active at Period Start', number_format($m['active_at_period_start'] ?? 0)],
+        ['Renewal Success', $pct($m['renewal_success_rate'] ?? null)],
+    ];
     $orderRows = [
         ['One-time Purchase', $m['one_time_purchase']],
         ['Subscription Purchases', $m['subscription_purchases']],
@@ -76,6 +83,21 @@
                 </div>
             @endforeach
         </div>
+
+        {{-- Retention & churn --}}
+        <h2 class="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Retention &amp; Churn</h2>
+        <div class="mb-2 grid grid-cols-4 gap-3">
+            @foreach ($retentionRows as $row)
+                <div class="rounded-xl border border-slate-200 p-3">
+                    <p class="text-[12px] font-medium text-slate-500">{{ $row[0] }}</p>
+                    <p class="mt-0.5 text-2xl font-bold text-slate-900">{{ $row[1] }}</p>
+                </div>
+            @endforeach
+        </div>
+        <p class="mb-6 text-[11px] text-slate-400">
+            Subscriber counts are taken from each subscription's sign-up and end dates, so a closed month keeps the
+            figure it had at the time — a later cancellation does not remove anyone from it.
+        </p>
 
         {{-- Orders --}}
         <h2 class="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Orders</h2>

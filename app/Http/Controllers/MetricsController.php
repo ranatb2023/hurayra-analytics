@@ -135,6 +135,14 @@ class MetricsController extends Controller
         return response()->json($this->metrics->cohortRetention($offset));
     }
 
+    /** AJAX endpoint: month-by-month subscriber history and churn rate. */
+    public function churn(Request $request): JsonResponse
+    {
+        $months = min(60, max(1, (int) $request->integer('months', 12)));
+
+        return response()->json($this->metrics->churnSeries($months));
+    }
+
     /** AJAX endpoint: small monthly series for the headline sparklines. */
     public function sparklines(Request $request): JsonResponse
     {
@@ -155,9 +163,11 @@ class MetricsController extends Controller
         $period = $this->resolver->resolve($validated);
         $data = $this->metrics->summary($period, strictNotCompleted: $request->boolean('strict'), compare: $request->boolean('compare'));
 
+        $history = $this->metrics->churnSeries();
+
         $filename = 'hurayra-metrics-'.str_replace([' ', ':', '–', '/'], '-', $period->label).'.csv';
 
-        return response()->streamDownload(function () use ($data) {
+        return response()->streamDownload(function () use ($data, $history) {
             $out = fopen('php://output', 'w');
             fputcsv($out, ['Metric', 'Value', 'Previous', 'Change %']);
 
@@ -179,6 +189,20 @@ class MetricsController extends Controller
             fputcsv($out, ['Not-completed status', 'Count']);
             foreach (($data['metrics']['not_completed_breakdown'] ?? []) as $status => $count) {
                 fputcsv($out, [$status, $count]);
+            }
+
+            // Month-by-month subscriber history — fixed once a month closes.
+            fputcsv($out, []);
+            fputcsv($out, ['Month', 'Active at start', 'New', 'Churned', 'Active at end', 'Churn rate %']);
+            foreach ($history['rows'] as $row) {
+                fputcsv($out, [
+                    $row['month'],
+                    $row['active_start'],
+                    $row['new'],
+                    $row['churned'],
+                    $row['active_end'],
+                    $row['churn_rate'] ?? '',
+                ]);
             }
         }, $filename, ['Content-Type' => 'text/csv']);
     }

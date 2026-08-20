@@ -44,7 +44,8 @@
         'active_cancelled_ratio' => ['Active : Cancelled', $icons['scale'], 'bg-violet-50 text-violet-600', 'from-violet-400 to-fuchsia-500'],
     ];
     $retentionCards = [
-        'churn_rate' => ['Churn Rate', $icons['x_circle'], '', 'from-rose-400 to-pink-500'],
+        'monthly_churn_rate' => ['Monthly Churn', $icons['x_circle'], '', 'from-rose-400 to-pink-500'],
+        'churn_rate' => ['Lifetime Churn', $icons['scale'], '', 'from-rose-400 to-orange-500'],
         'renewal_success_rate' => ['Renewal Success', $icons['arrow_path'], '', 'from-emerald-400 to-teal-500'],
         'revenue_at_risk' => ['Revenue at Risk', $icons['exclaim'], '', 'from-amber-400 to-orange-500'],
         'failed_renewals' => ['Failed Renewals', $icons['x_circle'], '', 'from-rose-400 to-red-500'],
@@ -240,10 +241,80 @@
 
     {{-- ============ Retention & churn ============ --}}
     @include('dashboard.partials.section-heading', ['title' => 'Retention & Churn', 'bar' => 'from-rose-400 to-pink-500'])
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         @foreach ($retentionCards as $key => $c)
             @include('dashboard.partials.card', ['key' => $key, 'label' => $c[0], 'icon' => $c[1], 'bar' => $c[3]])
         @endforeach
+    </div>
+
+    {{-- Monthly churn maths, spelled out so the headline number is checkable. --}}
+    <p class="mt-3 text-xs text-slate-500">
+        Monthly churn = <span class="font-bold text-slate-700" x-text="value('churned_in_period')"></span> subscribers lost
+        during <span class="font-semibold text-slate-600" x-text="periodLabel"></span>
+        ÷ <span class="font-bold text-slate-700" x-text="value('active_at_period_start')"></span> active when it opened.
+        <span class="mx-1.5 text-slate-300">|</span>
+        Lifetime churn = all cancelled + expired ÷ all subscriptions ever.
+    </p>
+
+    {{-- Month-by-month subscriber history --}}
+    <div class="mt-4 print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm" x-show="churn.rows.length" x-cloak>
+        <div class="border-b border-slate-100 p-5">
+            <h3 class="text-sm font-bold text-slate-700">
+                Subscriber History <span class="font-medium text-slate-400">· last 12 months</span>
+            </h3>
+            <p class="mt-1 text-xs text-slate-500">
+                Each month is counted from the sign-up and end dates of every subscription, so a closed month never
+                changes. Somebody who was subscribed in March and cancels in June stays in March's count — only June's
+                row moves.
+            </p>
+            <template x-if="churn.coverage !== null && churn.coverage < 100">
+                <p class="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    <span class="font-semibold" x-text="`${churn.coverage}%`"></span> of ended subscriptions carry a real
+                    end date from the CSV. For the rest the last linked order is used as the end date, which can place a
+                    cancellation slightly early. Include an <code class="font-mono">ended_at</code> (or
+                    <code class="font-mono">date_cancelled_gmt</code>) column in the export to make this exact.
+                </p>
+            </template>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-50/70 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <tr>
+                        <th class="px-5 py-2.5">Month</th>
+                        <th class="px-5 py-2.5 text-right">Active at start</th>
+                        <th class="px-5 py-2.5 text-right">New</th>
+                        <th class="px-5 py-2.5 text-right">Churned</th>
+                        <th class="px-5 py-2.5 text-right">Active at end</th>
+                        <th class="px-5 py-2.5 text-right">Net</th>
+                        <th class="px-5 py-2.5 text-right">Churn rate</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    <template x-for="row in churnRows()" :key="row.month">
+                        <tr class="transition hover:bg-slate-50/60">
+                            <td class="px-5 py-2.5 font-medium text-slate-700" x-text="cohortMonthLabel(row.month)"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="row.active_start"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums font-semibold text-emerald-600" x-text="row.new"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums font-semibold text-rose-600" x-text="row.churned"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums font-semibold text-slate-900" x-text="row.active_end"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums"
+                                :class="row.active_end - row.active_start < 0 ? 'text-rose-600' : 'text-emerald-600'"
+                                x-text="netChangeLabel(row)"></td>
+                            <td class="px-5 py-2.5">
+                                <div class="flex items-center justify-end gap-2">
+                                    <span class="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
+                                        <span class="block h-full rounded-full bg-linear-to-r from-rose-400 to-pink-500"
+                                              :style="`width: ${churnBarWidth(row.churn_rate)}`"></span>
+                                    </span>
+                                    <span class="w-12 text-right tabular-nums font-semibold text-slate-700"
+                                          x-text="churnRateLabel(row.churn_rate)"></span>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     {{-- ============ Customers ============ --}}

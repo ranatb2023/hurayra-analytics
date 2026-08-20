@@ -30,6 +30,9 @@ export default (config = {}) => ({
     sparks: {},
     topCustomers: [],
     cohorts: null,
+    // Month-by-month subscriber history. Fixed once a month closes — a later
+    // cancellation moves that month's row, never the ones before it.
+    churn: { rows: [], coverage: null },
     copied: false,
 
     // One-time buyers who later subscribed (lifetime, independent of the filter).
@@ -48,7 +51,7 @@ export default (config = {}) => ({
 
     // value formatting
     currencyKeys: ['total_revenue', 'average_order_value', 'subscription_revenue', 'one_time_revenue', 'revenue_at_risk', 'revenue_per_customer'],
-    percentKeys: ['churn_rate', 'renewal_success_rate', 'repeat_rate'],
+    percentKeys: ['churn_rate', 'monthly_churn_rate', 'renewal_success_rate', 'repeat_rate', 'end_date_coverage'],
 
     init() {
         // React to filter changes without wiring each input by hand.
@@ -61,6 +64,7 @@ export default (config = {}) => ({
         this.fetchSparklines();
         this.fetchTopCustomers();
         this.fetchCohorts();
+        this.fetchChurn();
         this.fetchUpsell();
     },
 
@@ -167,6 +171,36 @@ export default (config = {}) => ({
             const res = await fetch('/api/metrics/cohorts?offset=6', { headers: { Accept: 'application/json' } });
             if (res.ok) this.cohorts = await res.json();
         } catch (_) { /* non-critical */ }
+    },
+
+    async fetchChurn() {
+        try {
+            const res = await fetch('/api/metrics/churn?months=12', { headers: { Accept: 'application/json' } });
+            if (res.ok) {
+                const data = await res.json();
+                this.churn = { rows: data.rows ?? [], coverage: data.end_date_coverage ?? null };
+            }
+        } catch (_) { /* non-critical */ }
+    },
+
+    /** Newest month first, the way you read a history table. */
+    churnRows() {
+        return [...this.churn.rows].reverse();
+    },
+
+    churnRateLabel(rate) {
+        return rate === null || rate === undefined ? '—' : `${rate}%`;
+    },
+
+    /** Bar width for the inline churn-rate meter, capped at a 25% full scale. */
+    churnBarWidth(rate) {
+        if (!rate) return '0%';
+        return `${Math.min(100, (rate / 25) * 100).toFixed(1)}%`;
+    },
+
+    netChangeLabel(row) {
+        const net = row.active_end - row.active_start;
+        return net > 0 ? `+${net}` : String(net);
     },
 
     // --- one-time -> subscription upsell list ---
@@ -441,7 +475,8 @@ export default (config = {}) => ({
         const m = this.metrics;
         if (!m || !Object.keys(m).length) return '';
         return `${this.periodLabel}: ${this.value('new_subscribers')} new subscribers, `
-            + `${this.value('churn_rate')} churn, ${this.value('total_revenue')} revenue across `
+            + `${this.value('churned_in_period')} churned (${this.value('monthly_churn_rate')} of `
+            + `${this.value('active_at_period_start')} at the start), ${this.value('total_revenue')} revenue across `
             + `${this.value('completed')} completed orders, ${this.value('unique_customers')} customers.`;
     },
 

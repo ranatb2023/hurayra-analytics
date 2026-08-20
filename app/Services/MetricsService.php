@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Record;
 use App\Support\Period;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
@@ -12,11 +13,33 @@ use Illuminate\Support\Facades\DB;
  *
  * Time semantics (confirmed with the product owner):
  *  - Cohort metrics  (orders + "New Subscribers"): date_created_gmt in [start, end).
- *  - Snapshot metrics (subscription status counts): current status, existing as
- *    of the period end, i.e. date_created_gmt < end. Sign-up date lower bound is
- *    ignored — these answer "how many are in state X right now".
+ *  - Point-in-time metrics (subscription status counts): the state the
+ *    subscription was in at the period end, NOT the state it is in today. See
+ *    "Point-in-time subscriptions" below.
  *  - Cancelled with/without purchase: a linked completed order counts whenever it
  *    happened (lifetime), joined at query time on subscription_id.
+ *
+ * ## Point-in-time subscriptions
+ *
+ * `records.status` is a live value overwritten by every import, so counting
+ * `status = 'active'` answers "who is active *today*", not "who was active in
+ * March". Left alone, last month's subscriber count shrinks every time someone
+ * cancels — history rewrites itself.
+ *
+ * The fix is an end date. A subscription is counted as active at instant T when
+ * it was created before T and had not ended before T:
+ *
+ *   created < T AND (status = 'active' OR (status is terminal AND end >= T))
+ *
+ * where "end" is {@see effectiveEndExpr()}: the imported `ended_at` when the CSV
+ * carries one, otherwise the date of the subscription's last linked order — the
+ * last point we can prove it was still being billed. Under this rule a customer
+ * who was active in March and cancelled in June stays in March's count forever.
+ *
+ * `on-hold`, `pending` and `pending-cancel` are live states with no history in
+ * the source data, so they are still read as-is and keep their own cards. A
+ * subscription sitting in `pending-cancel` today has not cancelled yet, so once
+ * it does cancel it correctly appears as active in the months before its end.
  *
  * The service is pure: it never touches the request or session.
  */
@@ -27,6 +50,12 @@ class MetricsService
     private const STRICT_NOT_COMPLETED = ['pending', 'processing'];
 
     private const SUBSCRIPTION_PURCHASE_RELS = ['parent', 'renewal'];
+
+    /** Statuses that mean "no longer a subscriber" — the ones churn is made of. */
+    private const TERMINAL = Record::TERMINAL_SUBSCRIPTION_STATUSES;
+
+    /** How many months {@see churnSeries()} returns by default. */
+    private const CHURN_SERIES_MONTHS = 12;
 
     /**
      * Full dashboard payload: every metric, supporting totals, the not-completed
@@ -109,11 +138,17 @@ class MetricsService
 
         // ---- Retention / churn ----
         $statusBreakdownSub = [];
-        foreach (\App\Models\Record::SUBSCRIPTION_STATUSES as $s) {
+        foreach (Record::SUBSCRIPTION_STATUSES as $s) {
             $statusBreakdownSub[$s] = $this->snapshotCount($s, $endS);
         }
         $totalSubs = $this->subscriptions()->where('date_created_gmt', '<', $endS)->count();
         $churned = ($statusBreakdownSub['cancelled'] ?? 0) + ($statusBreakdownSub['expired'] ?? 0);
+
+        // Monthly churn: who left DURING the window, over the base that was
+        // active when it opened. Unlike the lifetime rate above this is a flow,
+        // so it moves month to month instead of only ever climbing.
+        $activeAtStart = $this->activeAsOf($startS);
+        $churnedInPeriod = $this->churnedBetween($startS, $endS);
 
         $renewalsInWindow = $this->ordersInWindow($startS, $endS)->where('order_relationship', 'renewal');
         $renewalTotal = (clone $renewalsInWindow)->count();
@@ -172,6 +207,12 @@ class MetricsService
             'subscription_status_breakdown' => $statusBreakdownSub,
             'total_subscriptions' => $totalSubs,
             'churn_rate' => $totalSubs > 0 ? round($churned / $totalSubs * 100, 1) : 0.0,
+            'monthly_churn_rate' => $activeAtStart > 0
+                ? round($churnedInPeriod / $activeAtStart * 100, 1)
+                : null, // undefined with no subscribers to lose
+            'churned_in_period' => $churnedInPeriod,
+            'active_at_period_start' => $activeAtStart,
+            'end_date_coverage' => $this->endDateCoverage($endS),
             'renewal_success_rate' => $renewalTotal > 0 ? round($renewalCompleted / $renewalTotal * 100, 1) : null,
             'failed_renewals' => $renewalTotal - $renewalCompleted,
             'revenue_at_risk' => round($revenueAtRisk, 2),
@@ -306,6 +347,106 @@ class MetricsService
                     ->whereIn('order_relationship', self::SUBSCRIPTION_PURCHASE_RELS),
             ],
         ];
+    }
+
+    /**
+     * Month-by-month subscriber history: how many were active when each month
+     * opened, how many joined, how many left, and the resulting churn rate.
+     *
+     * Every figure is derived from each subscription's sign-up and end dates, so
+     * a month's numbers are fixed once it is over. Somebody cancelling in June
+     * changes June's row and nothing before it — re-running this next year gives
+     * the same answer for March that it gives today.
+     *
+     * @param  int  $months  how many trailing months to return (1–60)
+     * @return array{rows: array<int, array{month:string, active_start:int, new:int, churned:int, active_end:int, churn_rate:?float}>, end_date_coverage: ?float}
+     */
+    public function churnSeries(int $months = self::CHURN_SERIES_MONTHS): array
+    {
+        $months = max(1, min(60, $months));
+
+        $subs = $this->subscriptionLifecycle()
+            ->whereNotNull('s.date_created_gmt')
+            ->selectRaw('s.status, s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended')
+            ->get()
+            ->map(fn ($r) => [
+                'created' => (string) $r->created,
+                'ended' => $r->ended === null ? null : (string) $r->ended,
+                'terminal' => in_array((string) $r->status, self::TERMINAL, true),
+                'active' => (string) $r->status === 'active',
+            ])
+            ->all();
+
+        if ($subs === []) {
+            return ['rows' => [], 'end_date_coverage' => null];
+        }
+
+        // Anchor on the newest activity in the data rather than "now", so a
+        // dataset that stops in June does not trail empty months.
+        $latest = (string) DB::table('records')->max('date_created_gmt');
+        $lastMonth = CarbonImmutable::parse($latest !== '' ? $latest : 'now')->startOfMonth();
+        $firstMonth = $lastMonth->subMonths($months - 1);
+
+        $rows = [];
+
+        for ($cursor = $firstMonth; $cursor <= $lastMonth; $cursor = $cursor->addMonth()) {
+            $startS = $cursor->toDateTimeString();
+            $endS = $cursor->addMonth()->toDateTimeString();
+
+            $activeStart = 0;
+            $activeEnd = 0;
+            $joined = 0;
+            $churned = 0;
+
+            foreach ($subs as $sub) {
+                if ($this->wasActiveAt($sub, $startS)) {
+                    $activeStart++;
+                }
+                if ($this->wasActiveAt($sub, $endS)) {
+                    $activeEnd++;
+                }
+                if ($sub['created'] >= $startS && $sub['created'] < $endS) {
+                    $joined++;
+                }
+                if ($sub['terminal'] && $sub['ended'] !== null
+                    && $sub['ended'] >= $startS && $sub['ended'] < $endS) {
+                    $churned++;
+                }
+            }
+
+            $rows[] = [
+                'month' => $cursor->format('Y-m'),
+                'active_start' => $activeStart,
+                'new' => $joined,
+                'churned' => $churned,
+                'active_end' => $activeEnd,
+                'churn_rate' => $activeStart > 0 ? round($churned / $activeStart * 100, 1) : null,
+            ];
+        }
+
+        return [
+            'rows' => $rows,
+            'end_date_coverage' => $this->endDateCoverage($lastMonth->addMonth()->toDateTimeString()),
+        ];
+    }
+
+    /**
+     * The PHP twin of {@see activeAsOf()}'s SQL predicate, for the in-memory
+     * month walk. Kept next to it so the two definitions stay in step.
+     *
+     * @param  array{created:string, ended:?string, terminal:bool, active:bool}  $sub
+     */
+    private function wasActiveAt(array $sub, string $instant): bool
+    {
+        if ($sub['created'] >= $instant) {
+            return false;
+        }
+
+        if ($sub['active']) {
+            return true;
+        }
+
+        return $sub['terminal'] && $sub['ended'] !== null && $sub['ended'] >= $instant;
     }
 
     /**
@@ -550,12 +691,122 @@ class MetricsService
             ->where('date_created_gmt', '<', $end);
     }
 
+    /**
+     * How many subscriptions were in $status at instant $end.
+     *
+     * Dispatches to the point-in-time counters for the statuses whose history we
+     * can reconstruct ({@see activeAsOf()}, {@see endedAsOf()}); the remaining
+     * live-only states fall back to reading the current status, which is the
+     * best the source data supports.
+     */
     private function snapshotCount(string $status, string $end): int
     {
+        if ($status === 'active') {
+            return $this->activeAsOf($end);
+        }
+
+        if (in_array($status, self::TERMINAL, true)) {
+            return $this->endedAsOf($status, $end);
+        }
+
         return $this->subscriptions()
             ->where('status', $status)
             ->where('date_created_gmt', '<', $end)
             ->count();
+    }
+
+    /**
+     * Subscriptions + the date each one stopped being a subscriber.
+     *
+     * `ended_at` is only present when the export carried an end-date column, so
+     * we fall back to the subscription's last linked order — the most recent
+     * moment we can prove it was still live. Joined as a derived table rather
+     * than a correlated subquery so the aggregate is computed once.
+     */
+    private function subscriptionLifecycle(): Builder
+    {
+        $lastOrder = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->whereNotNull('subscription_id')
+            ->whereNotNull('date_created_gmt')
+            ->selectRaw('subscription_id, MAX(date_created_gmt) as last_order_at')
+            ->groupBy('subscription_id');
+
+        return DB::table('records as s')
+            ->leftJoinSub($lastOrder, 'lo', 'lo.subscription_id', '=', 's.id')
+            ->where('s.record_type', 'shop_subscription');
+    }
+
+    /** The end-of-life instant for a subscription; NULL while it is still running. */
+    private function effectiveEndExpr(): string
+    {
+        return 'COALESCE(s.ended_at, lo.last_order_at)';
+    }
+
+    /**
+     * Subscribers who were active at instant $end — including everyone who has
+     * cancelled since. This is what keeps a past month's number from shrinking.
+     */
+    private function activeAsOf(string $end): int
+    {
+        return $this->subscriptionLifecycle()
+            ->whereNotNull('s.date_created_gmt')
+            ->where('s.date_created_gmt', '<', $end)
+            ->where(function (Builder $q) use ($end) {
+                $q->where('s.status', 'active')
+                    ->orWhere(function (Builder $terminal) use ($end) {
+                        // NULL end date => we cannot prove it was still live, so
+                        // the comparison is NULL and the row drops out.
+                        $terminal->whereIn('s.status', self::TERMINAL)
+                            ->whereRaw($this->effectiveEndExpr().' >= ?', [$end]);
+                    });
+            })
+            ->count();
+    }
+
+    /** Subscriptions that had already left in $status by instant $end. */
+    private function endedAsOf(string $status, string $end): int
+    {
+        return $this->subscriptionLifecycle()
+            ->where('s.status', $status)
+            ->where('s.date_created_gmt', '<', $end)
+            ->where(function (Builder $q) use ($end) {
+                // No end date known: fall back to counting it, so the terminal
+                // statuses still add up to the same lifetime totals as before.
+                $q->whereRaw($this->effectiveEndExpr().' < ?', [$end])
+                    ->orWhereRaw($this->effectiveEndExpr().' IS NULL');
+            })
+            ->count();
+    }
+
+    /** Subscribers who left during [start, end) — the numerator of churn. */
+    private function churnedBetween(string $start, string $end): int
+    {
+        return $this->subscriptionLifecycle()
+            ->whereIn('s.status', self::TERMINAL)
+            ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
+            ->whereRaw($this->effectiveEndExpr().' < ?', [$end])
+            ->count();
+    }
+
+    /**
+     * Share of ended subscriptions (as of $end) carrying a real imported
+     * `ended_at` rather than the last-order approximation. Surfaced so the
+     * dashboard can say how trustworthy the churn timing is.
+     */
+    private function endDateCoverage(string $end): ?float
+    {
+        $ended = $this->subscriptions()
+            ->whereIn('status', self::TERMINAL)
+            ->where('date_created_gmt', '<', $end);
+
+        $total = (clone $ended)->count();
+
+        if ($total === 0) {
+            return null;
+        }
+
+        return round((clone $ended)->whereNotNull('ended_at')->count() / $total * 100, 1);
     }
 
     /**

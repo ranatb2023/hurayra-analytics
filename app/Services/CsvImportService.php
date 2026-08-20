@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Import;
+use App\Models\Record;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use SplFileObject;
@@ -26,6 +27,27 @@ class CsvImportService
         'subscription_id',
         'order_relationship',
         'billing_email',
+    ];
+
+    /**
+     * Optional end-date columns, in priority order. The first one present in the
+     * header wins. WooCommerce names this differently depending on where the
+     * export came from (HPOS `wp_wc_orders`, the Subscriptions schedule meta, or
+     * a hand-rolled query), so we accept every spelling we have seen.
+     *
+     * Only read for `shop_subscription` rows in a terminal status — for a live
+     * subscription a "last modified" stamp is not an end date.
+     */
+    public const ENDED_AT_COLUMNS = [
+        'ended_at',
+        'date_cancelled_gmt',
+        'cancelled_date',
+        'date_ended_gmt',
+        'end_date',
+        'schedule_end',
+        'schedule_cancelled',
+        'date_modified_gmt',
+        'date_updated_gmt',
     ];
 
     private const CHUNK_SIZE = 500;
@@ -167,13 +189,16 @@ class CsvImportService
         }
 
         $now = Carbon::now();
+        $status = $this->normaliseStatus($get('status'));
+        $createdAt = $this->parseDate($get('date_created_gmt'));
 
         return [
             'id' => $id,
             'import_id' => $importId,
             'record_type' => $recordType,
-            'status' => $this->normaliseStatus($get('status')),
-            'date_created_gmt' => $this->parseDate($get('date_created_gmt')),
+            'status' => $status,
+            'date_created_gmt' => $createdAt,
+            'ended_at' => $this->resolveEndedAt($recordType, $status, $createdAt, $index, $get),
             'total_amount' => $this->numericOrZero($get('total_amount')),
             'subscription_id' => $this->intOrNull($get('subscription_id')),
             'customer_id' => $this->intOrNull($get('customer_id')), // optional extra column
@@ -184,13 +209,48 @@ class CsvImportService
         ];
     }
 
+    /**
+     * The date a subscription left the lifecycle, from whichever optional column
+     * the file provides. Null unless this is a subscription in a terminal
+     * status, and never earlier than the sign-up date (a bad stamp would make
+     * the subscription look like it ended before it began).
+     *
+     * @param  callable(string): mixed  $get
+     */
+    private function resolveEndedAt(string $recordType, string $status, ?string $createdAt, array $index, callable $get): ?string
+    {
+        if ($recordType !== 'shop_subscription') {
+            return null;
+        }
+
+        if (! in_array($status, Record::TERMINAL_SUBSCRIPTION_STATUSES, true)) {
+            return null;
+        }
+
+        foreach (self::ENDED_AT_COLUMNS as $column) {
+            if (! isset($index[$column])) {
+                continue;
+            }
+
+            $parsed = $this->parseDate($get($column));
+
+            if ($parsed === null) {
+                continue; // blank in this row; try the next-best column
+            }
+
+            return $createdAt !== null && $parsed < $createdAt ? $createdAt : $parsed;
+        }
+
+        return null;
+    }
+
     private function flush(array $buffer): void
     {
         DB::table('records')->upsert(
             $buffer,
             ['id'],
             [
-                'import_id', 'record_type', 'status', 'date_created_gmt',
+                'import_id', 'record_type', 'status', 'date_created_gmt', 'ended_at',
                 'total_amount', 'subscription_id', 'customer_id', 'order_relationship',
                 'billing_email', 'updated_at',
             ],
