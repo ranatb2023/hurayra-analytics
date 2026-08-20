@@ -70,10 +70,15 @@ months shrink every time somebody cancels (see
 Include an end date in the export and that stops. Any **one** of these column
 names is picked up, in this order — the first one present in the header wins:
 
-```
-ended_at, date_cancelled_gmt, cancelled_date, date_ended_gmt, end_date,
-schedule_end, schedule_cancelled, date_modified_gmt, date_updated_gmt
-```
+| Priority | Columns | Meaning |
+| --- | --- | --- |
+| 1 | `ended_at`, `date_ended_gmt`, `end_date`, `schedule_end` | When the subscription actually finished. |
+| 2 | `date_cancelled_gmt`, `cancelled_date`, `schedule_cancelled` | When cancellation was **requested** — usually earlier, since a subscription cancelled on the 1st still runs to the end of its paid term. |
+| 3 | `date_modified_gmt`, `date_updated_gmt` | Last touch on the row. Rough, but close enough for a subscription cancelled and never edited since. |
+
+**Ready-made queries live in [`database/export/`](database/export/):** run
+`01-discover-schedule-keys.sql` to confirm the schedule meta keys in your
+install, then export with `02-export.sql`.
 
 It is read **only** for `shop_subscription` rows in a terminal status
 (`cancelled` / `expired`) — for a live subscription a "last modified" stamp is
@@ -165,6 +170,23 @@ All order metrics are **cohort** (events in the window).
 - **Failed renewals** / **Revenue at risk** — count and `SUM(total_amount)` of `failed`/`pending` renewal orders in the period (recoverable, involuntary churn).
 - **Subscription status mix** — point-in-time donut across all six subscription statuses.
 - **Subscriber history** (`GET /api/metrics/churn?months=12`) — a row per calendar month with *active at start*, *new*, *churned*, *active at end* and the churn rate. Every figure comes from sign-up and end dates, so a closed month's row never changes; a cancellation in June moves June's row and nothing before it. Also appended to the metrics CSV export.
+
+### Reconciling a subscriber count
+
+When the dashboard disagrees with another report, `subs:explain` puts every
+subscription into exactly one labelled bucket for a given month:
+
+```
+php artisan subs:explain 2026-04          # measured at the month end, as the cards read
+php artisan subs:explain 2026-04 --at=start
+```
+
+It prints what was counted and why, what was excluded and why, the totals under
+each competing definition of "active", the same figure measured at the start /
+end / any point in the month, and how much of the end-date timing is real rather
+than inferred. A gap that matches one of the alternative definitions is a
+definition mismatch; a gap that matches none of them is a data problem — almost
+always missing end dates.
 
 ### Customers (needs the `customer_id` column)
 - **Unique / New / Returning customers** — distinct `customer_id` on orders in the period; *new* = first-ever order falls in the period.

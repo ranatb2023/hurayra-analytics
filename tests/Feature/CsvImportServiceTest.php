@@ -147,6 +147,28 @@ class CsvImportServiceTest extends TestCase
         @unlink($path);
     }
 
+    public function test_real_end_date_beats_a_cancellation_request_date(): void
+    {
+        // A subscription cancelled on 1 April whose paid term runs to the 30th
+        // was a subscriber for all of April. The end date has to win.
+        $header = array_merge(CsvImportService::EXPECTED_COLUMNS, ['schedule_cancelled', 'schedule_end']);
+        $path = tempnam(sys_get_temp_dir(), 'csv_').'.csv';
+        $fh = fopen($path, 'w');
+        fputcsv($fh, $header);
+        fputcsv($fh, ['801', 'shop_subscription', 'wc-cancelled', '2026-01-10 00:00:00', '20.00', '', 'subscription', 'a@example.com', '2026-04-01 00:00:00', '2026-04-30 00:00:00']);
+        // Falls through to the request date when no end date is recorded.
+        fputcsv($fh, ['802', 'shop_subscription', 'wc-cancelled', '2026-01-10 00:00:00', '20.00', '', 'subscription', 'b@example.com', '2026-04-01 00:00:00', '']);
+        fclose($fh);
+
+        $import = Import::create(['original_filename' => 'sched.csv', 'status' => 'processing']);
+        $this->service->import($import, $path);
+
+        $this->assertSame('2026-04-30 00:00:00', Record::find(801)->ended_at->toDateTimeString());
+        $this->assertSame('2026-04-01 00:00:00', Record::find(802)->ended_at->toDateTimeString());
+
+        @unlink($path);
+    }
+
     public function test_end_date_is_optional(): void
     {
         // The canonical header has no end-date column at all.

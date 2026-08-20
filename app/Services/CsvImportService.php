@@ -39,13 +39,19 @@ class CsvImportService
      * subscription a "last modified" stamp is not an end date.
      */
     public const ENDED_AT_COLUMNS = [
+        // When the subscription actually finished.
         'ended_at',
-        'date_cancelled_gmt',
-        'cancelled_date',
         'date_ended_gmt',
         'end_date',
         'schedule_end',
+        // When cancellation was REQUESTED. Usually earlier than the end — a
+        // subscription cancelled on the 1st still runs to the end of its paid
+        // term — so these only apply when no real end date is present.
+        'date_cancelled_gmt',
+        'cancelled_date',
         'schedule_cancelled',
+        // Last touch on the row. Only a rough proxy, and only ever consulted
+        // for a subscription already in a terminal status.
         'date_modified_gmt',
         'date_updated_gmt',
     ];
