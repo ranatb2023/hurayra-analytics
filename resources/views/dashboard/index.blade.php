@@ -23,7 +23,10 @@
     // key => [label, icon, icon-chip classes, top-bar gradient]
     $subscriptionCards = [
         'new_subscribers' => ['New Subscribers', $icons['user_plus'], 'bg-indigo-50 text-indigo-600', 'from-indigo-400 to-violet-500'],
-        'subscribers_active' => ['Active Subscribers', $icons['users'], 'bg-emerald-50 text-emerald-600', 'from-emerald-400 to-teal-500'],
+        // The caption matters: this counts status `active` at one instant. A
+        // report that includes on-hold, or that was snapshotted mid-period, will
+        // legitimately read higher — see `php artisan subs:explain`.
+        'subscribers_active' => ['Active Subscribers', $icons['users'], 'bg-emerald-50 text-emerald-600', 'from-emerald-400 to-teal-500', "periodEndNote()"],
         'pending_cancellation' => ['Pending Cancellation', $icons['clock'], 'bg-amber-50 text-amber-600', 'from-amber-400 to-orange-500'],
         'on_hold' => ['On Hold', $icons['pause'], 'bg-sky-50 text-sky-600', 'from-sky-400 to-cyan-500'],
         'cancelled_without_purchase' => ['Cancelled · No Purchase', $icons['x_circle'], 'bg-rose-50 text-rose-600', 'from-rose-400 to-pink-500'],
@@ -196,9 +199,17 @@
     @include('dashboard.partials.section-heading', ['title' => 'Subscriptions', 'bar' => 'from-indigo-400 to-violet-500'])
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         @foreach ($subscriptionCards as $key => $c)
-            @include('dashboard.partials.card', ['key' => $key, 'label' => $c[0], 'icon' => $c[1], 'accent' => $c[2], 'bar' => $c[3]])
+            @include('dashboard.partials.card', ['key' => $key, 'label' => $c[0], 'icon' => $c[1], 'accent' => $c[2], 'bar' => $c[3], 'note' => $c[4] ?? null])
         @endforeach
     </div>
+
+    <p class="mt-3 text-xs text-slate-500">
+        <span class="font-semibold text-slate-600">Active Subscribers</span> counts status <code class="font-mono">active</code>
+        at a single instant — the end of the selected period. <span class="font-semibold text-slate-600">On Hold</span> and
+        <span class="font-semibold text-slate-600">Pending Cancellation</span> are separate states and are <em>not</em> included in it.
+        A report that counts those too, or that was taken part-way through the period, will read higher; run
+        <code class="font-mono">php artisan subs:explain {{ '{YYYY-MM}' }}</code> to see exactly which subscriptions account for the difference.
+    </p>
 
     {{-- ============ Orders ============ --}}
     @include('dashboard.partials.section-heading', ['title' => 'Orders', 'bar' => 'from-sky-400 to-blue-500'])

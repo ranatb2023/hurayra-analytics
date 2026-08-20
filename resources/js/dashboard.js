@@ -24,6 +24,7 @@ export default (config = {}) => ({
     metrics: {},
     comparison: null,
     periodLabel: '',
+    period: null,
     chart: null,
     statusChart: null,
     revenueChart: null,
@@ -149,6 +150,7 @@ export default (config = {}) => ({
         this.metrics = data.metrics;
         this.comparison = data.comparison;
         this.periodLabel = data.period?.label ?? '';
+        this.period = data.period ?? null;
         this.$nextTick(() => { this.renderStatusDonut(); this.renderRevenueDonut(); });
     },
 
@@ -343,6 +345,20 @@ export default (config = {}) => ({
             return `${v}%`;
         }
         return new Intl.NumberFormat().format(v);
+    },
+
+    /**
+     * The instant the snapshot cards are measured at, as a date a person reads.
+     * `period.end` is exclusive, so April's is stored as 1 May and shown as
+     * 30 Apr — the last day actually inside the period.
+     */
+    periodEndNote() {
+        const end = this.period?.end;
+        if (!end) return '';
+        const [y, m, d] = String(end).split(' ')[0].split('-');
+        if (!y || !m || !d) return '';
+        const last = new Date(+y, +m - 1, +d - 1);
+        return `as of ${last.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}`;
     },
 
     // --- sparklines (inline SVG path from a values array) ---

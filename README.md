@@ -134,9 +134,23 @@ the months before its end correctly show it as active.
 | # | Metric | Definition | Semantics |
 | --- | --- | --- | --- |
 | 1 | **New Subscribers** | subscription rows created in the period | cohort |
-| 2 | **Subscribers Count** | active at the period end — still running, or ended on/after it | point-in-time |
+| 2 | **Subscribers Count** | status `active` at the period end — still running, or ended on/after it | point-in-time |
 | 3 | **Pending Cancellation** | status `pending-cancel` | live status |
 | 4 | **On Hold** | status `on-hold` | live status |
+
+> **Active Subscribers counts `active` only.** `on-hold` and `pending-cancel`
+> are separate cards and are deliberately **not** folded into it. A subscription
+> suspended for a failed payment has not ended, so a report that counts it as a
+> subscriber is equally defensible and will read higher — this is a definition
+> difference, not a bug. The card is captioned with the exact date it is
+> measured at, because the figure also moves day to day within a period.
+> `subs:explain` (below) shows precisely which subscriptions separate the two.
+>
+> One known limitation follows from this: `on-hold`, `pending` and
+> `pending-cancel` have no history in the source data, so a subscription that is
+> on hold *today* is left out of *every* past month, including months it spent
+> as `active`. Only `cancelled`/`expired` carry an end date that can be read
+> backwards.
 | 5 | **Cancelled without Purchase** | signed up in the period, status `cancelled`, **and 0** linked order rows with status `completed` | cohort + lifetime link |
 | 6 | **Cancelled with Purchase** | signed up in the period, status `cancelled`, **and ≥1** linked completed order | cohort + lifetime link |
 
@@ -177,8 +191,10 @@ When the dashboard disagrees with another report, `subs:explain` puts every
 subscription into exactly one labelled bucket for a given month:
 
 ```
-php artisan subs:explain 2026-04          # measured at the month end, as the cards read
+php artisan subs:explain 2026-04                      # at the month end, as the cards read
 php artisan subs:explain 2026-04 --at=start
+php artisan subs:explain 2026-04 --at=2026-04-15      # any specific date
+php artisan subs:explain 2026-04 --daily --target=156 # scan every day, flag what matches
 ```
 
 It prints what was counted and why, what was excluded and why, the totals under

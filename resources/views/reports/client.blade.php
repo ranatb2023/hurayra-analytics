@@ -84,6 +84,12 @@
             @endforeach
         </div>
 
+        <p class="mb-6 text-[11px] text-slate-400">
+            Active Subscribers counts status <span class="font-mono">active</span> as of
+            {{ $period->end->subDay()->format('M j, Y') }}. On Hold and Pending Cancellation are separate
+            states and are not included in it.
+        </p>
+
         {{-- Retention & churn --}}
         <h2 class="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Retention &amp; Churn</h2>
         <div class="mb-2 grid grid-cols-4 gap-3">
