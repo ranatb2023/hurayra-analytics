@@ -182,6 +182,7 @@ All order metrics are **cohort** (events in the window).
 - **Lifetime churn rate** — (cancelled + expired) ÷ all subscriptions, as of the period end. A cumulative ratio that only ever climbs; kept for continuity.
 - **Renewal success rate** — completed renewals ÷ all renewal orders in the period.
 - **Failed renewals** / **Revenue at risk** — count and `SUM(total_amount)` of `failed`/`pending` renewal orders in the period (recoverable, involuntary churn).
+- **Tenure at churn** — the same subscribers the monthly churn rate counts, bucketed by how long they had been subscribed (0–30 / 31–60 / 61–90 / 91–180 / 181+ days) plus the median. The rate says *how many* left; this says *who* — customers who never settled in, or long-standing ones drifting away. Tenure runs from sign-up to the same end date churn uses, so the bucket total always equals `churned_in_period`. Follows the active date filter, and is included in the CSV export and the client report.
 - **Subscription status mix** — point-in-time donut across all six subscription statuses.
 - **Subscriber history** (`GET /api/metrics/churn?months=12`) — a row per calendar month with *active at start*, *new*, *churned*, *active at end* and the churn rate. Every figure comes from sign-up and end dates, so a closed month's row never changes; a cancellation in June moves June's row and nothing before it. Also appended to the metrics CSV export.
 

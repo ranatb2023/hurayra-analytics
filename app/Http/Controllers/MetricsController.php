@@ -191,6 +191,18 @@ class MetricsController extends Controller
                 fputcsv($out, [$status, $count]);
             }
 
+            // Tenure of the period's leavers — the churn number, split by how
+            // long each subscriber had lasted.
+            $tenure = $data['metrics']['tenure_at_churn'] ?? null;
+            if ($tenure !== null && $tenure['total'] > 0) {
+                fputcsv($out, []);
+                fputcsv($out, ['Tenure at churn', 'Subscribers', 'Share %']);
+                foreach ($tenure['buckets'] as $bucket) {
+                    fputcsv($out, [$bucket['label'], $bucket['count'], $bucket['pct']]);
+                }
+                fputcsv($out, ['Median tenure (days)', $tenure['median_days'] ?? '', '']);
+            }
+
             // Month-by-month subscriber history — fixed once a month closes.
             fputcsv($out, []);
             fputcsv($out, ['Month', 'Active at start', 'New', 'Churned', 'Active at end', 'Churn rate %']);

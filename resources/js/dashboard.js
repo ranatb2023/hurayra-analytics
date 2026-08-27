@@ -205,6 +205,26 @@ export default (config = {}) => ({
         return net > 0 ? `+${net}` : String(net);
     },
 
+    // --- tenure at churn (how long the period's leavers had been subscribed) ---
+    tenure() {
+        return this.metrics.tenure_at_churn ?? { total: 0, median_days: null, buckets: [] };
+    },
+
+    /**
+     * Bars are scaled against the biggest bucket, not against 100%, so the
+     * shape of the distribution stays readable when churn is concentrated.
+     */
+    tenureBarWidth(bucket) {
+        const peak = Math.max(...this.tenure().buckets.map((b) => b.count), 0);
+        if (!peak || !bucket.count) return '0%';
+        return `${Math.max(2, (bucket.count / peak) * 100).toFixed(1)}%`;
+    },
+
+    tenureMedianLabel() {
+        const d = this.tenure().median_days;
+        return d === null || d === undefined ? '—' : `${d} days`;
+    },
+
     // --- one-time -> subscription upsell list ---
     upsellParams() {
         const p = new URLSearchParams();

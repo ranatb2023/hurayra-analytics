@@ -58,6 +58,18 @@ class MetricsService
     private const CHURN_SERIES_MONTHS = 12;
 
     /**
+     * Tenure buckets for {@see tenureAtChurn()}, as [label, inclusive upper
+     * bound in days]. A null bound closes the open-ended final bucket.
+     */
+    private const TENURE_BUCKETS = [
+        ['0–30 days', 30],
+        ['31–60 days', 60],
+        ['61–90 days', 90],
+        ['91–180 days', 180],
+        ['181+ days', null],
+    ];
+
+    /**
      * Full dashboard payload: every metric, supporting totals, the not-completed
      * breakdown, and (optionally) the compare-to-previous deltas.
      */
@@ -212,6 +224,7 @@ class MetricsService
                 : null, // undefined with no subscribers to lose
             'churned_in_period' => $churnedInPeriod,
             'active_at_period_start' => $activeAtStart,
+            'tenure_at_churn' => $this->tenureAtChurn($startS, $endS),
             'end_date_coverage' => $this->endDateCoverage($endS),
             'renewal_success_rate' => $renewalTotal > 0 ? round($renewalCompleted / $renewalTotal * 100, 1) : null,
             'failed_renewals' => $renewalTotal - $renewalCompleted,
@@ -787,6 +800,86 @@ class MetricsService
             ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
             ->whereRaw($this->effectiveEndExpr().' < ?', [$end])
             ->count();
+    }
+
+    /**
+     * How long the subscribers who left during [start, end) had been subscribed
+     * — the same population {@see churnedBetween()} counts, split by tenure.
+     *
+     * The churn rate says how many left; this says whether they were customers
+     * who never settled in or long-standing ones drifting away, which are
+     * different problems. Tenure is sign-up to {@see effectiveEndExpr()}, so it
+     * inherits that method's accuracy: exact with a real `ended_at`, and up to
+     * one billing cycle short when falling back to the last linked order.
+     *
+     * Bucketed in PHP rather than SQL because the date-difference function is
+     * driver-specific, and the row count here is one month of churn.
+     *
+     * @return array{total:int, median_days:?int, buckets:array<int, array{label:string, count:int, pct:float}>}
+     */
+    public function tenureAtChurn(string $start, string $end): array
+    {
+        $rows = $this->subscriptionLifecycle()
+            ->whereNotNull('s.date_created_gmt')
+            ->whereIn('s.status', self::TERMINAL)
+            ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
+            ->whereRaw($this->effectiveEndExpr().' < ?', [$end])
+            ->selectRaw('s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended')
+            ->get();
+
+        $days = [];
+        foreach ($rows as $row) {
+            // Clamped at 0: a fallback end date can predate the sign-up when a
+            // subscription has no orders of its own.
+            $days[] = max(0, CarbonImmutable::parse((string) $row->created)
+                ->diffInDays(CarbonImmutable::parse((string) $row->ended)));
+        }
+
+        $total = count($days);
+
+        $counts = array_fill(0, count(self::TENURE_BUCKETS), 0);
+        foreach ($days as $d) {
+            foreach (self::TENURE_BUCKETS as $i => [$label, $max]) {
+                if ($max === null || $d <= $max) {
+                    $counts[$i]++;
+                    break;
+                }
+            }
+        }
+
+        $buckets = [];
+        foreach (self::TENURE_BUCKETS as $i => [$label, $max]) {
+            $buckets[] = [
+                'label' => $label,
+                'count' => $counts[$i],
+                'pct' => $total > 0 ? round($counts[$i] / $total * 100, 1) : 0.0,
+            ];
+        }
+
+        return [
+            'total' => $total,
+            'median_days' => $this->median($days),
+            'buckets' => $buckets,
+        ];
+    }
+
+    /**
+     * Middle value of a list, averaging the two middles on an even count.
+     *
+     * @param  array<int, int>  $values
+     */
+    private function median(array $values): ?int
+    {
+        if ($values === []) {
+            return null;
+        }
+
+        sort($values);
+        $mid = intdiv(count($values), 2);
+
+        return count($values) % 2 === 1
+            ? $values[$mid]
+            : (int) round(($values[$mid - 1] + $values[$mid]) / 2);
     }
 
     /**

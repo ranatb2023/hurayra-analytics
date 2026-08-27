@@ -100,10 +100,39 @@
                 </div>
             @endforeach
         </div>
-        <p class="mb-6 text-[11px] text-slate-400">
+        <p class="mb-4 text-[11px] text-slate-400">
             Subscriber counts are taken from each subscription's sign-up and end dates, so a closed month keeps the
             figure it had at the time — a later cancellation does not remove anyone from it.
         </p>
+
+        {{-- Tenure at churn: the leavers above, split by how long they lasted. --}}
+        @php $tenure = $m['tenure_at_churn'] ?? null; @endphp
+        @if ($tenure && $tenure['total'] > 0)
+            <div class="mb-6 rounded-xl border border-slate-200 p-4">
+                <div class="mb-3 flex items-baseline justify-between">
+                    <h3 class="text-[12px] font-bold text-slate-600">Tenure at churn</h3>
+                    <p class="text-[11px] text-slate-500">
+                        Median <span class="font-bold text-slate-900">{{ $tenure['median_days'] }} days</span>
+                    </p>
+                </div>
+                @php $peak = max(array_column($tenure['buckets'], 'count')); @endphp
+                @foreach ($tenure['buckets'] as $bucket)
+                    <div class="mb-1.5 flex items-center gap-3">
+                        <span class="w-20 shrink-0 text-[11px] text-slate-500">{{ $bucket['label'] }}</span>
+                        <span class="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                            <span class="block h-full rounded-full bg-rose-400"
+                                  style="width: {{ $peak > 0 ? round($bucket['count'] / $peak * 100, 1) : 0 }}%"></span>
+                        </span>
+                        <span class="w-6 shrink-0 text-right text-xs font-bold text-slate-900">{{ $bucket['count'] }}</span>
+                        <span class="w-10 shrink-0 text-right text-[11px] text-slate-400">{{ $bucket['pct'] }}%</span>
+                    </div>
+                @endforeach
+                <p class="mt-3 border-t border-slate-100 pt-3 text-[11px] text-slate-400">
+                    How long the {{ number_format($tenure['total']) }} subscribers lost this period had been subscribed,
+                    measured from sign-up to their end date.
+                </p>
+            </div>
+        @endif
 
         {{-- Orders --}}
         <h2 class="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Orders</h2>
