@@ -135,6 +135,14 @@ class MetricsController extends Controller
         return response()->json($this->metrics->cohortRetention($offset));
     }
 
+    /** AJAX endpoint: lifetime value by sign-up month. */
+    public function cohortValue(Request $request): JsonResponse
+    {
+        $cohorts = min(24, max(1, (int) $request->integer('cohorts', 12)));
+
+        return response()->json($this->metrics->cohortValue($cohorts));
+    }
+
     /** AJAX endpoint: month-by-month subscriber history and churn rate. */
     public function churn(Request $request): JsonResponse
     {

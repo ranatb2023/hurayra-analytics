@@ -32,8 +32,10 @@
         // report that includes on-hold, or that was snapshotted mid-period, will
         // legitimately read higher — see `php artisan subs:explain`.
         'subscribers_active' => ['Active Subscribers', $icons['users'], 'bg-emerald-50 text-emerald-600', 'from-emerald-400 to-teal-500', "periodEndNote()"],
-        'on_hold' => ['On Hold', $icons['pause'], 'bg-sky-50 text-sky-600', 'from-sky-400 to-cyan-500', "'live state, as of the period end'"],
+        'on_hold' => ['On Hold', $icons['pause'], 'bg-sky-50 text-sky-600', 'from-sky-400 to-cyan-500', 'onHoldNote()'],
         'pending_cancellation' => ['Pending Cancellation', $icons['clock'], 'bg-amber-50 text-amber-600', 'from-amber-400 to-orange-500', "'live state, as of the period end'"],
+        // A checkout failure, not a lost customer - see the caption below.
+        'failed_signups' => ['Failed Sign-ups', $icons['exclaim'], 'bg-amber-50 text-amber-600', 'from-amber-400 to-orange-500', "'ended without ever ordering'"],
     ];
     // Cohort cards: this period's SIGN-UPS, followed through to their status
     // today. They answer "did this intake stick?", never "who left this month".
@@ -53,11 +55,11 @@
         'average_order_value' => ['Avg Order Value', $icons['calc'], 'bg-teal-50 text-teal-600', 'from-teal-400 to-cyan-500'],
         'subscription_revenue' => ['Subscription Revenue', $icons['arrow_path'], 'bg-indigo-50 text-indigo-600', 'from-indigo-400 to-violet-500'],
         'one_time_revenue' => ['One-time Revenue', $icons['bag'], 'bg-sky-50 text-sky-600', 'from-sky-400 to-blue-500'],
-        'active_cancelled_ratio' => ['Active : Cancelled', $icons['scale'], 'bg-violet-50 text-violet-600', 'from-violet-400 to-fuchsia-500'],
     ];
     $retentionCards = [
-        'monthly_churn_rate' => ['Monthly Churn', $icons['x_circle'], '', 'from-rose-400 to-pink-500'],
-        'churn_rate' => ['Lifetime Churn', $icons['scale'], '', 'from-rose-400 to-orange-500'],
+        'monthly_churn_rate' => ['Monthly Churn', $icons['x_circle'], '', 'from-rose-400 to-pink-500', "'all leavers'"],
+        'monthly_churn_rate_net' => ['Churn · Real', $icons['x_circle'], '', 'from-rose-400 to-red-500', "'excludes failed sign-ups'"],
+        'net_revenue_retention' => ['Net Revenue Retention', $icons['dollar'], '', 'from-emerald-400 to-teal-500', "'revenue kept from the opening book'"],
         'renewal_success_rate' => ['Renewal Success', $icons['arrow_path'], '', 'from-emerald-400 to-teal-500'],
         'revenue_at_risk' => ['Revenue at Risk', $icons['exclaim'], '', 'from-amber-400 to-orange-500'],
         'failed_renewals' => ['Failed Renewals', $icons['x_circle'], '', 'from-rose-400 to-red-500'],
@@ -238,6 +240,22 @@
         <code class="font-mono">php artisan subs:explain {{ '{YYYY-MM}' }}</code> to see exactly which subscriptions account for the difference.
     </p>
 
+    <p class="mt-2 text-xs text-slate-500">
+        <span class="font-semibold text-slate-600">Failed Sign-ups</span> are a subset of Subscribers Lost: subscriptions
+        that ended having never completed a single order. They cost no revenue and belong to the checkout funnel, not to
+        retention — see <span class="font-semibold text-slate-600">Churn · Real</span> below for the rate without them.
+    </p>
+
+    {{-- On-hold subscriptions that stopped paying are invisible to churn: churn
+         counts terminal statuses only, and nothing promotes a stalled hold. --}}
+    <div x-show="onHoldDormant() > 0" x-cloak
+         class="mt-3 rounded-xl bg-amber-50 px-4 py-3 text-xs text-amber-900">
+        <span class="font-semibold" x-text="onHoldDormant()"></span> on-hold subscription(s) have not had a
+        <em>successful</em> payment in 45+ days — failed retries do not count. They have stopped paying but will never appear in the churn figures, because churn only counts
+        <code class="font-mono">cancelled</code> and <code class="font-mono">expired</code>. Treat the churn rate as a
+        floor while this number is non-zero.
+    </div>
+
     {{-- Drill-down: the actual rows behind "Subscribers Lost", so the number is
          checkable against WooCommerce rather than taken on trust. --}}
     <div class="no-print mt-3">
@@ -416,11 +434,20 @@
 
     {{-- ============ Retention & churn ============ --}}
     @include('dashboard.partials.section-heading', ['title' => 'Retention & Churn', 'bar' => 'from-rose-400 to-pink-500'])
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         @foreach ($retentionCards as $key => $c)
-            @include('dashboard.partials.card', ['key' => $key, 'label' => $c[0], 'icon' => $c[1], 'bar' => $c[3]])
+            @include('dashboard.partials.card', ['key' => $key, 'label' => $c[0], 'icon' => $c[1], 'bar' => $c[3], 'note' => $c[4] ?? null])
         @endforeach
     </div>
+
+    {{-- Why two churn numbers, and what the revenue one adds. --}}
+    <p class="mt-3 text-xs text-slate-500">
+        <span class="font-semibold text-slate-600">Churn · Real</span> takes out subscriptions that ended having never
+        completed an order — a broken checkout rather than a lost customer.
+        <span class="font-semibold text-slate-600">Net Revenue Retention</span> asks what share of the recurring revenue
+        on the books at the period start was still being billed at the end, counting only subscribers who were already
+        there. Above 100% means upgrades outweighed losses; it ignores new sign-ups by design.
+    </p>
 
     {{-- Monthly churn maths, spelled out so the headline number is checkable. --}}
     <p class="mt-3 text-xs text-slate-500">
@@ -884,6 +911,64 @@
         </div>
         <div class="mt-5 h-80">
             <canvas x-ref="trendCanvas"></canvas>
+        </div>
+    </div>
+
+    {{-- ============ Cohort value ============ --}}
+    @include('dashboard.partials.section-heading', ['title' => 'Cohort Value', 'bar' => 'from-emerald-400 to-teal-500'])
+    <div class="print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm"
+         x-show="cohortValue.rows && cohortValue.rows.length" x-cloak>
+        <div class="border-b border-slate-100 p-5">
+            <h3 class="text-sm font-bold text-slate-700">
+                Lifetime Value by Sign-up Month
+            </h3>
+            <p class="mt-1 text-xs text-slate-500">
+                What each intake has earned, all orders counted. Read against what it costs to acquire a subscriber:
+                this is the number that decides whether the churn rate is survivable. Cohorts from the last three
+                months are still accruing revenue and are marked <span class="font-semibold">immature</span>.
+            </p>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-50/70 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <tr>
+                        <th class="px-5 py-2.5">Cohort</th>
+                        <th class="px-5 py-2.5 text-right">Signed up</th>
+                        <th class="px-5 py-2.5 text-right">Still active</th>
+                        <th class="px-5 py-2.5 text-right">Retained</th>
+                        <th class="px-5 py-2.5 text-right">Median tenure</th>
+                        <th class="px-5 py-2.5 text-right">Total earned</th>
+                        <th class="px-5 py-2.5">Value / subscriber</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    <template x-for="row in cohortValue.rows" :key="row.cohort">
+                        <tr class="transition hover:bg-slate-50/60">
+                            <td class="whitespace-nowrap px-5 py-2.5 font-medium text-slate-700">
+                                <span x-text="cohortMonthLabel(row.cohort)"></span>
+                                <span x-show="row.immature"
+                                      class="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">immature</span>
+                            </td>
+                            <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="row.size"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums font-semibold text-emerald-600" x-text="row.still_active"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="`${row.retained_pct}%`"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums text-slate-500"
+                                x-text="row.median_tenure_days === null ? '—' : `${row.median_tenure_days}d`"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="money(row.total_spend)"></td>
+                            <td class="px-5 py-2.5">
+                                <div class="flex items-center justify-end gap-2">
+                                    <span class="h-1.5 w-20 overflow-hidden rounded-full bg-slate-100">
+                                        <span class="block h-full rounded-full bg-linear-to-r from-emerald-400 to-teal-500"
+                                              :style="`width: ${valueBarWidth(row)}`"></span>
+                                    </span>
+                                    <span class="w-16 text-right font-bold tabular-nums text-slate-900"
+                                          x-text="money(row.value_per_subscriber)"></span>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
         </div>
     </div>
 

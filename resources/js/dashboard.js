@@ -31,6 +31,8 @@ export default (config = {}) => ({
     sparks: {},
     topCustomers: [],
     cohorts: null,
+    // Lifetime value by sign-up month (period-independent).
+    cohortValue: { rows: [] },
     // Month-by-month subscriber history. Fixed once a month closes — a later
     // cancellation moves that month's row, never the ones before it.
     churn: { rows: [], coverage: null },
@@ -56,7 +58,8 @@ export default (config = {}) => ({
 
     // value formatting
     currencyKeys: ['total_revenue', 'average_order_value', 'subscription_revenue', 'one_time_revenue', 'revenue_at_risk', 'revenue_per_customer'],
-    percentKeys: ['churn_rate', 'monthly_churn_rate', 'renewal_success_rate', 'repeat_rate', 'end_date_coverage'],
+    percentKeys: ['churn_rate', 'monthly_churn_rate', 'monthly_churn_rate_net', 'net_revenue_retention',
+        'gross_revenue_retention', 'renewal_success_rate', 'repeat_rate', 'end_date_coverage'],
 
     init() {
         // React to filter changes without wiring each input by hand.
@@ -69,6 +72,7 @@ export default (config = {}) => ({
         this.fetchSparklines();
         this.fetchTopCustomers();
         this.fetchCohorts();
+        this.fetchCohortValue();
         this.fetchChurn();
         this.fetchUpsell();
     },
@@ -182,6 +186,31 @@ export default (config = {}) => ({
             const res = await fetch('/api/metrics/cohorts?offset=6', { headers: { Accept: 'application/json' } });
             if (res.ok) this.cohorts = await res.json();
         } catch (_) { /* non-critical */ }
+    },
+
+    async fetchCohortValue() {
+        try {
+            const res = await fetch('/api/metrics/cohort-value?cohorts=12', { headers: { Accept: 'application/json' } });
+            if (res.ok) this.cohortValue = await res.json();
+        } catch (_) { /* non-critical */ }
+    },
+
+    /** On Hold is a live state; dormant ones are the part that will never churn. */
+    onHoldNote() {
+        const d = this.metrics.on_hold_dormant ?? 0;
+        if (!d) return 'live state, as of the period end';
+        return `${d} dormant 45d+ — stopped paying, never counted as churn`;
+    },
+
+    onHoldDormant() {
+        return this.metrics.on_hold_dormant ?? 0;
+    },
+
+    /** Bar width for the cohort-value column, scaled to the richest cohort. */
+    valueBarWidth(row) {
+        const peak = Math.max(...(this.cohortValue.rows ?? []).map((r) => r.value_per_subscriber), 0);
+        if (!peak || !row.value_per_subscriber) return '0%';
+        return `${Math.max(2, (row.value_per_subscriber / peak) * 100).toFixed(1)}%`;
     },
 
     async fetchChurn() {
