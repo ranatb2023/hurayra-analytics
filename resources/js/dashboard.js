@@ -36,6 +36,10 @@ export default (config = {}) => ({
     churn: { rows: [], coverage: null },
     copied: false,
 
+    // The subscriptions behind the period's churn number, fetched on demand so
+    // the dashboard does not pay for the list unless somebody opens it.
+    lost: { open: false, loading: false, error: null, rows: [], total: 0, returned: 0 },
+
     // One-time buyers who later subscribed (lifetime, independent of the filter).
     upsell: { rows: [], summary: {}, total: 0 },
     upsellLoading: false,
@@ -151,6 +155,11 @@ export default (config = {}) => ({
         this.comparison = data.comparison;
         this.periodLabel = data.period?.label ?? '';
         this.period = data.period ?? null;
+        // The drill-down belongs to the period it was fetched for; drop it so a
+        // filter change cannot leave last period's rows under this period's
+        // count. Refetched only if the panel is still open.
+        this.lost = { ...this.lost, rows: [], total: 0, returned: 0, error: null };
+        if (this.lost.open) this.fetchLost();
         this.$nextTick(() => { this.renderStatusDonut(); this.renderRevenueDonut(); });
     },
 
@@ -223,6 +232,42 @@ export default (config = {}) => ({
     tenureMedianLabel() {
         const d = this.tenure().median_days;
         return d === null || d === undefined ? '—' : `${d} days`;
+    },
+
+    // --- drill-down: the individual subscriptions counted as churn ---
+    async toggleLost() {
+        this.lost.open = !this.lost.open;
+        if (this.lost.open && this.lost.rows.length === 0) await this.fetchLost();
+    },
+
+    async fetchLost() {
+        this.lost.loading = true;
+        this.lost.error = null;
+        try {
+            const res = await fetch(`/api/metrics/churned-subscriptions?${this.filterParams().toString()}`, {
+                headers: { Accept: 'application/json' },
+            });
+            // An empty list on failure would read as "nobody churned", which is
+            // a claim, not an error state.
+            if (!res.ok) throw new Error(`Could not load the list (HTTP ${res.status}).`);
+            const data = await res.json();
+            this.lost = { ...this.lost, rows: data.rows ?? [], total: data.total ?? 0, returned: data.returned ?? 0 };
+        } catch (e) {
+            this.lost.error = e.message;
+        } finally {
+            this.lost.loading = false;
+        }
+    },
+
+    lostExportHref() {
+        return `/api/metrics/churned-subscriptions/export?${this.filterParams().toString()}`;
+    },
+
+    /** Short date for the drill-down table. */
+    shortDate(value) {
+        if (!value) return '—';
+        const [y, m, d] = String(value).split(' ')[0].split('-');
+        return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: '2-digit' });
     },
 
     // --- one-time -> subscription upsell list ---

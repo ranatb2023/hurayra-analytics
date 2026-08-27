@@ -803,6 +803,74 @@ class MetricsService
     }
 
     /**
+     * The subscriptions behind {@see churnedBetween()} — the actual rows the
+     * churn number counts, so it can be checked against WooCommerce.
+     *
+     * Same predicate as the count, so the list and the headline can never
+     * disagree. `joined_in_period` flags the ones that signed up and left
+     * inside the same window: they are part of the churn numerator but were
+     * never in the opening base it is divided by, which is the single most
+     * confusing thing about the rate.
+     *
+     * @param  int|null  $limit  row cap for the UI; null returns everything (export)
+     * @return array{total:int, returned:int, rows:array<int, array<string, mixed>>}
+     */
+    public function churnedSubscriptions(string $start, string $end, ?int $limit = null): array
+    {
+        $orders = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->whereNotNull('subscription_id')
+            ->selectRaw('subscription_id, COUNT(*) as orders')
+            ->selectRaw("SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders")
+            ->selectRaw("SUM(CASE WHEN status = 'completed' THEN total_amount ELSE 0 END) as spend")
+            ->groupBy('subscription_id');
+
+        $base = $this->subscriptionLifecycle()
+            ->leftJoinSub($orders, 'agg', 'agg.subscription_id', '=', 's.id')
+            ->whereNotNull('s.date_created_gmt')
+            ->whereIn('s.status', self::TERMINAL)
+            ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
+            ->whereRaw($this->effectiveEndExpr().' < ?', [$end]);
+
+        $total = (clone $base)->count();
+
+        $query = (clone $base)
+            ->selectRaw('s.id, s.status, s.billing_email, s.customer_id')
+            ->selectRaw('s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended')
+            ->selectRaw('agg.orders, agg.completed_orders, agg.spend')
+            ->orderByRaw($this->effectiveEndExpr().' asc');
+
+        if ($limit !== null) {
+            $query->limit($limit);
+        }
+
+        $rows = [];
+        foreach ($query->get() as $r) {
+            $created = CarbonImmutable::parse((string) $r->created);
+            $ended = CarbonImmutable::parse((string) $r->ended);
+            $completed = (int) ($r->completed_orders ?? 0);
+
+            $rows[] = [
+                'id' => (int) $r->id,
+                'status' => (string) $r->status,
+                'customer' => $r->billing_email ?: ($r->customer_id > 0 ? 'Customer #'.$r->customer_id : null),
+                'created' => $created->toDateTimeString(),
+                'ended' => $ended->toDateTimeString(),
+                'tenure_days' => (int) max(0, floor($created->diffInDays($ended))),
+                'orders' => (int) ($r->orders ?? 0),
+                'completed_orders' => $completed,
+                'spend' => round((float) ($r->spend ?? 0), 2),
+                // Signed up inside the same window: counted as churn, but never
+                // part of the base the rate divides by.
+                'joined_in_period' => $r->created >= $start,
+                'had_purchase' => $completed > 0,
+            ];
+        }
+
+        return ['total' => $total, 'returned' => count($rows), 'rows' => $rows];
+    }
+
+    /**
      * How long the subscribers who left during [start, end) had been subscribed
      * — the same population {@see churnedBetween()} counts, split by tenure.
      *
@@ -829,10 +897,12 @@ class MetricsService
 
         $days = [];
         foreach ($rows as $row) {
-            // Clamped at 0: a fallback end date can predate the sign-up when a
-            // subscription has no orders of its own.
-            $days[] = max(0, CarbonImmutable::parse((string) $row->created)
-                ->diffInDays(CarbonImmutable::parse((string) $row->ended)));
+            // diffInDays() is fractional, so floor to whole days elapsed: a
+            // subscription in its 31st day belongs in the 31-60 bucket, not at
+            // the top of 0-30. Clamped at 0 because a fallback end date can
+            // predate the sign-up when a subscription has no orders of its own.
+            $days[] = (int) max(0, floor(CarbonImmutable::parse((string) $row->created)
+                ->diffInDays(CarbonImmutable::parse((string) $row->ended))));
         }
 
         $total = count($days);

@@ -21,16 +21,25 @@
     ];
 
     // key => [label, icon, icon-chip classes, top-bar gradient]
+    // Two different questions, kept in two different groups because reading a
+    // sign-up cohort as though it were a flow is the single easiest mistake to
+    // make on this dashboard: "9 cancelled" and "60 lost" are both true of the
+    // same month and describe almost entirely different people.
     $subscriptionCards = [
-        'new_subscribers' => ['New Subscribers', $icons['user_plus'], 'bg-indigo-50 text-indigo-600', 'from-indigo-400 to-violet-500'],
+        'new_subscribers' => ['New Subscribers', $icons['user_plus'], 'bg-indigo-50 text-indigo-600', 'from-indigo-400 to-violet-500', "'joined during this period'"],
+        'churned_in_period' => ['Subscribers Lost', $icons['x_circle'], 'bg-rose-50 text-rose-600', 'from-rose-400 to-pink-500', "'ended during this period'"],
         // The caption matters: this counts status `active` at one instant. A
         // report that includes on-hold, or that was snapshotted mid-period, will
         // legitimately read higher — see `php artisan subs:explain`.
         'subscribers_active' => ['Active Subscribers', $icons['users'], 'bg-emerald-50 text-emerald-600', 'from-emerald-400 to-teal-500', "periodEndNote()"],
-        'pending_cancellation' => ['Pending Cancellation', $icons['clock'], 'bg-amber-50 text-amber-600', 'from-amber-400 to-orange-500'],
-        'on_hold' => ['On Hold', $icons['pause'], 'bg-sky-50 text-sky-600', 'from-sky-400 to-cyan-500'],
-        'cancelled_without_purchase' => ['Cancelled · No Purchase', $icons['x_circle'], 'bg-rose-50 text-rose-600', 'from-rose-400 to-pink-500'],
-        'cancelled_with_purchase' => ['Cancelled · Purchased', $icons['check_badge'], 'bg-fuchsia-50 text-fuchsia-600', 'from-fuchsia-400 to-purple-500'],
+        'on_hold' => ['On Hold', $icons['pause'], 'bg-sky-50 text-sky-600', 'from-sky-400 to-cyan-500', "'live state, as of the period end'"],
+        'pending_cancellation' => ['Pending Cancellation', $icons['clock'], 'bg-amber-50 text-amber-600', 'from-amber-400 to-orange-500', "'live state, as of the period end'"],
+    ];
+    // Cohort cards: this period's SIGN-UPS, followed through to their status
+    // today. They answer "did this intake stick?", never "who left this month".
+    $signupCohortCards = [
+        'cancelled_without_purchase' => ['Cancelled · No Purchase', $icons['x_circle'], 'bg-rose-50 text-rose-600', 'from-rose-400 to-pink-500', "'never completed an order'"],
+        'cancelled_with_purchase' => ['Cancelled · Purchased', $icons['check_badge'], 'bg-fuchsia-50 text-fuchsia-600', 'from-fuchsia-400 to-purple-500', "'ordered at least once'"],
     ];
     $orderCards = [
         'one_time_purchase' => ['One-time Purchase', $icons['bag'], 'bg-sky-50 text-sky-600', 'from-sky-400 to-blue-500'],
@@ -203,6 +212,24 @@
         @endforeach
     </div>
 
+    {{-- Set apart deliberately: these follow one intake forward in time, so they
+         are not comparable with the flow cards above. --}}
+    <div class="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 p-4">
+        <p class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            This period's sign-ups, tracked to today
+        </p>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            @foreach ($signupCohortCards as $key => $c)
+                @include('dashboard.partials.card', ['key' => $key, 'label' => $c[0], 'icon' => $c[1], 'accent' => $c[2], 'bar' => $c[3], 'note' => $c[4] ?? null])
+            @endforeach
+        </div>
+        <p class="mt-3 text-xs text-slate-500">
+            Of the people who <em>signed up</em> in this period, how many have cancelled since — whenever they left.
+            Not the same as <span class="font-semibold text-slate-600">Subscribers Lost</span> above, which counts everyone
+            who <em>left</em> during the period regardless of when they joined.
+        </p>
+    </div>
+
     <p class="mt-3 text-xs text-slate-500">
         <span class="font-semibold text-slate-600">Active Subscribers</span> counts status <code class="font-mono">active</code>
         at a single instant — the end of the selected period. <span class="font-semibold text-slate-600">On Hold</span> and
@@ -210,6 +237,87 @@
         A report that counts those too, or that was taken part-way through the period, will read higher; run
         <code class="font-mono">php artisan subs:explain {{ '{YYYY-MM}' }}</code> to see exactly which subscriptions account for the difference.
     </p>
+
+    {{-- Drill-down: the actual rows behind "Subscribers Lost", so the number is
+         checkable against WooCommerce rather than taken on trust. --}}
+    <div class="no-print mt-3">
+        <button @click="toggleLost()"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50">
+            <svg class="h-4 w-4 transition" :class="lost.open ? 'rotate-90' : ''" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+            </svg>
+            <span x-text="lost.open ? 'Hide the subscriptions lost' : `Show the ${value('churned_in_period')} subscriptions lost`"></span>
+        </button>
+    </div>
+
+    <div class="mt-3 print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm" x-show="lost.open" x-cloak>
+        <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 p-5">
+            <div>
+                <h3 class="text-sm font-bold text-slate-700">
+                    Subscribers Lost <span class="font-medium text-slate-400">· <span x-text="periodLabel"></span></span>
+                </h3>
+                <p class="mt-1 text-xs text-slate-500">
+                    Every subscription whose end date falls inside this period, whenever it signed up. These are the rows
+                    the churn rate counts — the ID matches the subscription id in WooCommerce.
+                </p>
+            </div>
+            <a :href="lostExportHref()"
+               class="no-print shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50">
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
+                Export CSV
+            </a>
+        </div>
+
+        <p x-show="lost.loading" x-cloak class="p-5 text-sm text-slate-500">Loading…</p>
+        <p x-show="lost.error" x-cloak class="m-5 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700" x-text="lost.error"></p>
+
+        <template x-if="!lost.loading && !lost.error">
+            <div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-sm">
+                        <thead class="bg-slate-50/70 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            <tr>
+                                <th class="px-5 py-2.5">Subscription</th>
+                                <th class="px-5 py-2.5">Customer</th>
+                                <th class="px-5 py-2.5">Signed up</th>
+                                <th class="px-5 py-2.5">Ended</th>
+                                <th class="px-5 py-2.5 text-right">Tenure</th>
+                                <th class="px-5 py-2.5 text-right">Paid orders</th>
+                                <th class="px-5 py-2.5 text-right">Spend</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            <template x-for="r in lost.rows" :key="r.id">
+                                <tr class="transition hover:bg-slate-50/60">
+                                    <td class="whitespace-nowrap px-5 py-2.5">
+                                        <span class="font-mono text-xs font-semibold text-slate-700" x-text="`#${r.id}`"></span>
+                                        {{-- Joined and left inside the same window: in the churn
+                                             numerator, but never in the base it is divided by. --}}
+                                        <span x-show="r.joined_in_period"
+                                              class="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">new this period</span>
+                                    </td>
+                                    <td class="max-w-[220px] truncate px-5 py-2.5 text-slate-600" x-text="r.customer || '—'"></td>
+                                    <td class="whitespace-nowrap px-5 py-2.5 text-slate-500" x-text="shortDate(r.created)"></td>
+                                    <td class="whitespace-nowrap px-5 py-2.5 text-slate-500" x-text="shortDate(r.ended)"></td>
+                                    <td class="px-5 py-2.5 text-right tabular-nums text-slate-700" x-text="`${r.tenure_days}d`"></td>
+                                    <td class="px-5 py-2.5 text-right tabular-nums"
+                                        :class="r.completed_orders === 0 ? 'font-semibold text-rose-600' : 'text-slate-600'"
+                                        x-text="r.completed_orders"></td>
+                                    <td class="px-5 py-2.5 text-right font-semibold tabular-nums text-slate-900" x-text="money(r.spend)"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+                {{-- Never let a capped list read as the whole story. --}}
+                <p x-show="lost.returned < lost.total" x-cloak
+                   class="border-t border-slate-100 bg-amber-50 px-5 py-2.5 text-xs text-amber-800">
+                    Showing the first <span class="font-semibold" x-text="lost.returned"></span> of
+                    <span class="font-semibold" x-text="lost.total"></span>. Export the CSV for the full list.
+                </p>
+            </div>
+        </template>
+    </div>
 
     {{-- ============ Orders ============ --}}
     @include('dashboard.partials.section-heading', ['title' => 'Orders', 'bar' => 'from-sky-400 to-blue-500'])

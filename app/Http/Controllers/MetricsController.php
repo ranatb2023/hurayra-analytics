@@ -143,6 +143,58 @@ class MetricsController extends Controller
         return response()->json($this->metrics->churnSeries($months));
     }
 
+    /** AJAX endpoint: the subscriptions behind the period's churn number. */
+    public function churnedSubscriptions(Request $request): JsonResponse
+    {
+        $period = $this->resolver->resolve($this->validateFilter($request));
+
+        $data = $this->metrics->churnedSubscriptions(
+            $period->start->toDateTimeString(),
+            $period->end->toDateTimeString(),
+            limit: min(2000, max(1, (int) $request->integer('limit', 500))),
+        );
+
+        return response()->json($data + ['period' => $period->toArray()]);
+    }
+
+    /** Download the full churned-subscription list for the period (no row cap). */
+    public function churnedSubscriptionsExport(Request $request): StreamedResponse
+    {
+        $period = $this->resolver->resolve($this->validateFilter($request));
+
+        $data = $this->metrics->churnedSubscriptions(
+            $period->start->toDateTimeString(),
+            $period->end->toDateTimeString(),
+        );
+
+        $filename = 'hurayra-subscribers-lost-'.str_replace([' ', ':', '–', '/'], '-', $period->label).'.csv';
+
+        return response()->streamDownload(function () use ($data) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, [
+                'Subscription ID', 'Customer', 'Status', 'Signed up', 'Ended',
+                'Tenure (days)', 'Orders', 'Completed orders', 'Completed spend',
+                'Joined in this period', 'Ever purchased',
+            ]);
+
+            foreach ($data['rows'] as $r) {
+                fputcsv($out, [
+                    $r['id'],
+                    $r['customer'] ?? '',
+                    $r['status'],
+                    $r['created'],
+                    $r['ended'],
+                    $r['tenure_days'],
+                    $r['orders'],
+                    $r['completed_orders'],
+                    $r['spend'],
+                    $r['joined_in_period'] ? 'yes' : 'no',
+                    $r['had_purchase'] ? 'yes' : 'no',
+                ]);
+            }
+        }, $filename, ['Content-Type' => 'text/csv']);
+    }
+
     /** AJAX endpoint: small monthly series for the headline sparklines. */
     public function sparklines(Request $request): JsonResponse
     {
