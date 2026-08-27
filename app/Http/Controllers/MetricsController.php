@@ -173,8 +173,10 @@ class MetricsController extends Controller
             $out = fopen('php://output', 'w');
             fputcsv($out, [
                 'Subscription ID', 'Customer', 'Status', 'Signed up', 'Ended',
-                'Tenure (days)', 'Orders', 'Completed orders', 'Completed spend',
+                'Tenure (days)', 'Orders', 'Completed orders', 'Completed spend', 'Last payment',
                 'Joined in this period', 'Ever purchased',
+                'Resubscribed', 'New subscription ID', 'Resubscribed on',
+                'Days to return', 'New subscription status', 'Same-day switch',
             ]);
 
             foreach ($data['rows'] as $r) {
@@ -188,8 +190,17 @@ class MetricsController extends Controller
                     $r['orders'],
                     $r['completed_orders'],
                     $r['spend'],
+                    $r['last_payment'],
                     $r['joined_in_period'] ? 'yes' : 'no',
                     $r['had_purchase'] ? 'yes' : 'no',
+                    // null means "no way to identify this customer", which is
+                    // not the same answer as "no".
+                    $r['returned'] === null ? 'unknown' : ($r['returned'] ? 'yes' : 'no'),
+                    $r['returned_subscription_id'] ?? '',
+                    $r['returned_at'] ?? '',
+                    $r['days_to_return'] ?? '',
+                    $r['returned_status'] ?? '',
+                    $r['same_day_switch'] ? 'yes' : 'no',
                 ]);
             }
         }, $filename, ['Content-Type' => 'text/csv']);

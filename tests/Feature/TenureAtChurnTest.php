@@ -28,7 +28,7 @@ class TenureAtChurnTest extends TestCase
         $this->metrics = new MetricsService;
     }
 
-    private function sub(int $id, string $status, string $created, ?string $ended = null): void
+    private function sub(int $id, string $status, string $created, ?string $ended = null, ?string $email = null, int $customerId = 0): void
     {
         Record::create([
             'id' => $id,
@@ -39,8 +39,9 @@ class TenureAtChurnTest extends TestCase
             'ended_at' => $ended,
             'total_amount' => 0,
             'subscription_id' => null,
+            'customer_id' => $customerId,
             'order_relationship' => null,
-            'billing_email' => null,
+            'billing_email' => $email,
         ]);
     }
 
@@ -49,6 +50,28 @@ class TenureAtChurnTest extends TestCase
         $start = CarbonImmutable::create(2026, 6, 1, 0, 0, 0);
 
         return $this->metrics->compute($start, $start->addMonth());
+    }
+
+    private function order(int $id, int $subscriptionId, string $created, float $amount, string $status = 'completed'): void
+    {
+        Record::create([
+            'id' => $id,
+            'import_id' => null,
+            'record_type' => 'shop_order',
+            'status' => $status,
+            'date_created_gmt' => $created,
+            'ended_at' => null,
+            'total_amount' => $amount,
+            'subscription_id' => $subscriptionId,
+            'customer_id' => 0,
+            'order_relationship' => 'renewal',
+            'billing_email' => null,
+        ]);
+    }
+
+    private function lostInJune(): array
+    {
+        return $this->metrics->churnedSubscriptions('2026-06-01 00:00:00', '2026-07-01 00:00:00');
     }
 
     private function seedJuneLeavers(): void
@@ -210,6 +233,159 @@ class TenureAtChurnTest extends TestCase
         // Header + four leavers.
         $this->assertCount(5, array_filter(explode('
 ', trim($csv))));
+    }
+
+    public function test_a_customer_who_signs_up_again_after_leaving_is_flagged_as_returned(): void
+    {
+        $this->sub(1, 'cancelled', '2026-01-10 00:00:00', '2026-06-10 00:00:00', 'back@example.com');
+        $this->sub(2, 'active', '2026-06-25 00:00:00', null, 'back@example.com');
+
+        $rows = collect($this->lostInJune()['rows'])->keyBy('id');
+
+        $this->assertTrue($rows[1]['returned']);
+        $this->assertSame(2, $rows[1]['returned_subscription_id']);
+        $this->assertSame(15, $rows[1]['days_to_return']);
+        $this->assertSame('active', $rows[1]['returned_status']);
+    }
+
+    public function test_email_matching_ignores_case_and_surrounding_space(): void
+    {
+        $this->sub(1, 'cancelled', '2026-01-10 00:00:00', '2026-06-10 00:00:00', 'Back@Example.com ');
+        $this->sub(2, 'active', '2026-06-25 00:00:00', null, 'back@example.com');
+
+        $this->assertTrue(collect($this->lostInJune()['rows'])->firstWhere('id', 1)['returned']);
+    }
+
+    public function test_a_second_plan_started_before_the_end_is_not_a_return(): void
+    {
+        // Overlapping subscription: they were running two at once, then one
+        // ended. Reading that as leaving-and-returning would be wrong.
+        $this->sub(1, 'cancelled', '2026-01-10 00:00:00', '2026-06-10 00:00:00', 'two@example.com');
+        $this->sub(2, 'active', '2026-03-01 00:00:00', null, 'two@example.com');
+
+        $this->assertFalse(collect($this->lostInJune()['rows'])->firstWhere('id', 1)['returned']);
+    }
+
+    public function test_a_same_day_restart_is_flagged_as_a_switch(): void
+    {
+        $this->sub(1, 'cancelled', '2026-01-10 00:00:00', '2026-06-10 09:00:00', 'switch@example.com');
+        $this->sub(2, 'active', '2026-06-10 09:05:00', null, 'switch@example.com');
+
+        $row = collect($this->lostInJune()['rows'])->firstWhere('id', 1);
+
+        $this->assertTrue($row['returned']);
+        $this->assertTrue($row['same_day_switch']);
+        $this->assertSame(1, $this->lostInJune()['summary']['same_day_switches']);
+    }
+
+    public function test_a_customer_with_no_email_is_unknown_rather_than_a_no(): void
+    {
+        $this->sub(1, 'cancelled', '2026-01-10 00:00:00', '2026-06-10 00:00:00');
+
+        $data = $this->lostInJune();
+
+        $this->assertNull($data['rows'][0]['returned']);
+        $this->assertSame(1, $data['summary']['unidentifiable']);
+        $this->assertSame(0, $data['summary']['identifiable']);
+        // No identifiable customers means no rate, not a rate of zero.
+        $this->assertNull($data['summary']['rate']);
+    }
+
+    public function test_customers_without_an_email_fall_back_to_the_customer_id(): void
+    {
+        $this->sub(1, 'cancelled', '2026-01-10 00:00:00', '2026-06-10 00:00:00', null, 77);
+        $this->sub(2, 'active', '2026-06-20 00:00:00', null, null, 77);
+
+        $this->assertTrue(collect($this->lostInJune()['rows'])->firstWhere('id', 1)['returned']);
+    }
+
+    public function test_the_win_back_rate_holds_unidentifiable_customers_out_of_the_denominator(): void
+    {
+        $this->sub(1, 'cancelled', '2026-01-10 00:00:00', '2026-06-10 00:00:00', 'a@example.com');
+        $this->sub(2, 'active', '2026-06-20 00:00:00', null, 'a@example.com');
+        $this->sub(3, 'cancelled', '2026-01-10 00:00:00', '2026-06-11 00:00:00', 'b@example.com');
+        $this->sub(4, 'cancelled', '2026-01-10 00:00:00', '2026-06-12 00:00:00'); // no identity
+
+        $summary = $this->lostInJune()['summary'];
+
+        // 1 of the 2 identifiable came back; the third is held out entirely.
+        $this->assertSame(2, $summary['identifiable']);
+        $this->assertSame(1, $summary['unidentifiable']);
+        $this->assertSame(1, $summary['resubscribed']);
+        $this->assertSame(50.0, $summary['rate']);
+    }
+
+    public function test_the_win_back_summary_covers_the_period_not_just_the_visible_page(): void
+    {
+        // Four leavers, all of whom returned; only two rows are requested.
+        foreach ([1, 2, 3, 4] as $i) {
+            $this->sub($i, 'cancelled', '2026-01-10 00:00:00', '2026-06-1'.$i.' 00:00:00', "c{$i}@example.com");
+            $this->sub($i + 10, 'active', '2026-06-25 00:00:00', null, "c{$i}@example.com");
+        }
+
+        $data = $this->metrics->churnedSubscriptions('2026-06-01 00:00:00', '2026-07-01 00:00:00', limit: 2);
+
+        $this->assertCount(2, $data['rows']);
+        // A rate computed from the truncated page would still say 100%, so the
+        // count is what proves the summary saw all four.
+        $this->assertSame(4, $data['summary']['resubscribed']);
+        $this->assertSame(4, $data['total']);
+    }
+
+    public function test_a_win_back_that_cancelled_again_is_not_counted_as_recovered(): void
+    {
+        $this->sub(1, 'cancelled', '2026-01-10 00:00:00', '2026-06-10 00:00:00', 'gone@example.com');
+        $this->sub(2, 'cancelled', '2026-06-20 00:00:00', '2026-06-28 00:00:00', 'gone@example.com');
+
+        $data = $this->lostInJune();
+        $row = collect($data['rows'])->firstWhere('id', 1);
+
+        $this->assertTrue($row['returned']);
+        $this->assertSame('cancelled', $row['returned_status']);
+        // They came back, but they are not a recovered customer.
+        $this->assertSame(1, $data['summary']['resubscribed']);
+        $this->assertSame(0, $data['summary']['still_active']);
+    }
+
+    public function test_churn_is_priced_by_what_each_leaver_was_last_paying(): void
+    {
+        $this->sub(1, 'cancelled', '2026-01-10 00:00:00', '2026-06-10 00:00:00', 'paid@example.com');
+        $this->order(100, 1, '2026-03-01 00:00:00', 10.00);
+        $this->order(101, 1, '2026-05-01 00:00:00', 25.00); // the price when they left
+
+        $data = $this->lostInJune();
+
+        $this->assertSame(25.00, $data['rows'][0]['last_payment']);
+        $this->assertSame(25.00, $data['summary']['recurring_lost']);
+        $this->assertSame(35.00, $data['summary']['lifetime_spend_lost']);
+    }
+
+    public function test_recovered_revenue_counts_only_win_backs_that_are_still_running(): void
+    {
+        // Left paying 20, came back and is still active.
+        $this->sub(1, 'cancelled', '2026-01-10 00:00:00', '2026-06-10 00:00:00', 'a@example.com');
+        $this->order(100, 1, '2026-05-01 00:00:00', 20.00);
+        $this->sub(2, 'active', '2026-06-20 00:00:00', null, 'a@example.com');
+
+        // Left paying 30, came back and cancelled again.
+        $this->sub(3, 'cancelled', '2026-01-10 00:00:00', '2026-06-11 00:00:00', 'b@example.com');
+        $this->order(101, 3, '2026-05-01 00:00:00', 30.00);
+        $this->sub(4, 'cancelled', '2026-06-21 00:00:00', '2026-06-30 00:00:00', 'b@example.com');
+
+        $summary = $this->lostInJune()['summary'];
+
+        $this->assertSame(50.00, $summary['recurring_lost']);
+        $this->assertSame(20.00, $summary['recurring_recovered']);
+    }
+
+    public function test_a_leaver_who_never_completed_an_order_is_priced_at_zero(): void
+    {
+        $this->sub(1, 'cancelled', '2026-06-01 00:00:00', '2026-06-10 00:00:00', 'free@example.com');
+
+        $data = $this->lostInJune();
+
+        $this->assertSame(0.0, $data['rows'][0]['last_payment']);
+        $this->assertSame(0.0, $data['summary']['recurring_lost']);
     }
 
     public function test_tenure_falls_back_to_the_last_linked_order_without_an_end_date(): void

@@ -273,6 +273,50 @@
 
         <template x-if="!lost.loading && !lost.error">
             <div>
+                {{-- Win-back: how much of this "churn" walked back through the
+                     door under the same email. --}}
+                <div x-show="lostSummary().identifiable > 0" x-cloak
+                     class="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-slate-100 bg-slate-50/60 px-5 py-3 text-xs text-slate-600">
+                    <span>
+                        <span class="text-base font-bold text-emerald-600" x-text="lostSummary().resubscribed"></span>
+                        of <span class="font-semibold" x-text="lostSummary().identifiable"></span>
+                        resubscribed with the same email
+                        (<span class="font-semibold" x-text="`${lostSummary().rate}%`"></span>)
+                    </span>
+                    <span x-show="lostSummary().median_days_to_return !== null">
+                        median gap <span class="font-semibold text-slate-700" x-text="`${lostSummary().median_days_to_return}d`"></span>
+                    </span>
+                    <span x-show="lostSummary().still_active > 0">
+                        <span class="font-semibold text-slate-700" x-text="lostSummary().still_active"></span> still active today
+                    </span>
+                    <span x-show="lostSummary().same_day_switches > 0" class="text-sky-700">
+                        <span class="font-semibold" x-text="lostSummary().same_day_switches"></span> restarted the same day
+                        (plan switches, not true churn)
+                    </span>
+                    <span x-show="lostSummary().unidentifiable > 0" class="text-slate-400">
+                        <span class="font-semibold" x-text="lostSummary().unidentifiable"></span> with no email on record,
+                        held out of the rate
+                    </span>
+                </div>
+
+                {{-- What the churn cost, rather than how many people it was. Two
+                     leavers at different price points are not the same loss. --}}
+                <div class="flex flex-wrap items-center gap-x-8 gap-y-2 border-b border-slate-100 px-5 py-3 text-xs text-slate-600">
+                    <span>
+                        Recurring revenue lost
+                        <span class="ml-1 text-base font-bold text-rose-600" x-text="money(lostSummary().recurring_lost)"></span>
+                        <span class="ml-1 text-slate-400">per cycle</span>
+                    </span>
+                    <span x-show="lostSummary().recurring_recovered > 0">
+                        recovered by still-active win-backs
+                        <span class="font-semibold text-emerald-600" x-text="money(lostSummary().recurring_recovered)"></span>
+                    </span>
+                    <span>
+                        lifetime spend of these customers
+                        <span class="font-semibold text-slate-700" x-text="money(lostSummary().lifetime_spend_lost)"></span>
+                    </span>
+                </div>
+
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-sm">
                         <thead class="bg-slate-50/70 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -284,6 +328,7 @@
                                 <th class="px-5 py-2.5 text-right">Tenure</th>
                                 <th class="px-5 py-2.5 text-right">Paid orders</th>
                                 <th class="px-5 py-2.5 text-right">Spend</th>
+                                <th class="px-5 py-2.5 text-right">Came back</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
@@ -304,6 +349,17 @@
                                         :class="r.completed_orders === 0 ? 'font-semibold text-rose-600' : 'text-slate-600'"
                                         x-text="r.completed_orders"></td>
                                     <td class="px-5 py-2.5 text-right font-semibold tabular-nums text-slate-900" x-text="money(r.spend)"></td>
+                                    <td class="whitespace-nowrap px-5 py-2.5 text-right">
+                                        <span class="rounded px-1.5 py-0.5 text-[11px] font-semibold"
+                                              :class="returnBadgeClass(r)"
+                                              :title="r.returned ? `Subscription #${r.returned_subscription_id}` : ''"
+                                              x-text="returnLabel(r)"></span>
+                                        {{-- Came back is not the same as stayed. --}}
+                                        <span x-show="r.returned && r.returned_status"
+                                              class="ml-1 rounded px-1.5 py-0.5 text-[11px] font-medium"
+                                              :class="returnStateClass(r)"
+                                              x-text="returnStateLabel(r)"></span>
+                                    </td>
                                 </tr>
                             </template>
                         </tbody>

@@ -832,20 +832,20 @@ class MetricsService
             ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
             ->whereRaw($this->effectiveEndExpr().' < ?', [$end]);
 
-        $total = (clone $base)->count();
-
-        $query = (clone $base)
+        // Annotated over the WHOLE set, then sliced: a win-back rate computed
+        // from a truncated page would describe the page, not the period.
+        $all = (clone $base)
             ->selectRaw('s.id, s.status, s.billing_email, s.customer_id')
             ->selectRaw('s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended')
             ->selectRaw('agg.orders, agg.completed_orders, agg.spend')
-            ->orderByRaw($this->effectiveEndExpr().' asc');
+            ->orderByRaw($this->effectiveEndExpr().' asc')
+            ->get();
 
-        if ($limit !== null) {
-            $query->limit($limit);
-        }
+        $index = $this->subscriptionsByCustomer();
+        $lastPayment = $this->lastPaymentPerSubscription($all->pluck('id')->all());
 
         $rows = [];
-        foreach ($query->get() as $r) {
+        foreach ($all as $r) {
             $created = CarbonImmutable::parse((string) $r->created);
             $ended = CarbonImmutable::parse((string) $r->ended);
             $completed = (int) ($r->completed_orders ?? 0);
@@ -860,14 +860,189 @@ class MetricsService
                 'orders' => (int) ($r->orders ?? 0),
                 'completed_orders' => $completed,
                 'spend' => round((float) ($r->spend ?? 0), 2),
+                // What they were paying per cycle when they left - the closest
+                // this data gets to the recurring revenue the churn costs.
+                'last_payment' => round((float) ($lastPayment[(int) $r->id] ?? 0), 2),
                 // Signed up inside the same window: counted as churn, but never
                 // part of the base the rate divides by.
                 'joined_in_period' => $r->created >= $start,
                 'had_purchase' => $completed > 0,
+            ] + $this->returnAfter($r, $index);
+        }
+
+        return [
+            'total' => count($rows),
+            'returned' => $limit === null ? count($rows) : min($limit, count($rows)),
+            'summary' => $this->winBackSummary($rows),
+            'rows' => $limit === null ? $rows : array_slice($rows, 0, $limit),
+        ];
+    }
+
+    /**
+     * Did this customer come back after this subscription ended?
+     *
+     * "Came back" is their next subscription starting on or after the end date.
+     * One that started while this was still running is a second concurrent plan,
+     * not a return, so the cutoff is the end date rather than the sign-up date.
+     * A same-day restart is almost always a plan switch and is flagged
+     * separately -- reading those as churn-then-win-back overstates both.
+     *
+     * @param  array<string, array<int, array{id:int, created:string, status:string}>>  $index
+     * @return array<string, mixed>
+     */
+    private function returnAfter(object $row, array $index): array
+    {
+        $none = [
+            'returned' => false,
+            'returned_subscription_id' => null,
+            'returned_at' => null,
+            'days_to_return' => null,
+            'returned_status' => null,
+            'same_day_switch' => false,
+        ];
+
+        $key = $this->customerKey($row->billing_email ?? null, (int) ($row->customer_id ?? 0));
+
+        // No email and no customer id: we cannot tell whether they came back,
+        // which is not the same as knowing they did not.
+        if ($key === null) {
+            return ['returned' => null] + $none;
+        }
+
+        $ended = (string) $row->ended;
+
+        foreach ($index[$key] ?? [] as $candidate) {
+            if ($candidate['id'] === (int) $row->id || $candidate['created'] < $ended) {
+                continue;
+            }
+
+            $endedAt = CarbonImmutable::parse($ended);
+            $back = CarbonImmutable::parse($candidate['created']);
+
+            return [
+                'returned' => true,
+                'returned_subscription_id' => $candidate['id'],
+                'returned_at' => $candidate['created'],
+                'days_to_return' => (int) max(0, floor($endedAt->diffInDays($back))),
+                'returned_status' => $candidate['status'],
+                'same_day_switch' => $back->isSameDay($endedAt),
             ];
         }
 
-        return ['total' => $total, 'returned' => count($rows), 'rows' => $rows];
+        return $none;
+    }
+
+    /**
+     * Win-back totals for a churned set. Customers we cannot identify are held
+     * out of the rate rather than counted as "did not return".
+     *
+     * @param  array<int, array<string, mixed>>  $rows
+     * @return array<string, mixed>
+     */
+    private function winBackSummary(array $rows): array
+    {
+        $known = array_filter($rows, fn ($r) => $r['returned'] !== null);
+        $back = array_filter($known, fn ($r) => $r['returned'] === true);
+        $gaps = array_values(array_filter(
+            array_column($back, 'days_to_return'),
+            fn ($d) => $d !== null,
+        ));
+
+        // Only a win-back that is still running has actually been recovered; one
+        // that came back and cancelled again is revenue lost twice over.
+        $stillActive = array_filter($back, fn ($r) => $r['returned_status'] === 'active');
+
+        return [
+            'identifiable' => count($known),
+            'unidentifiable' => count($rows) - count($known),
+            'resubscribed' => count($back),
+            'same_day_switches' => count(array_filter($back, fn ($r) => $r['same_day_switch'])),
+            'still_active' => count($stillActive),
+            'rate' => count($known) > 0 ? round(count($back) / count($known) * 100, 1) : null,
+            'median_days_to_return' => $this->median($gaps),
+            'recurring_lost' => round(array_sum(array_column($rows, 'last_payment')), 2),
+            'recurring_recovered' => round(array_sum(array_column($stillActive, 'last_payment')), 2),
+            'lifetime_spend_lost' => round(array_sum(array_column($rows, 'spend')), 2),
+        ];
+    }
+
+    /**
+     * The amount of each subscription's most recent completed order.
+     *
+     * Read as "what this customer was paying per cycle": the renewal price at
+     * the point they left. Not a true MRR - the data carries no billing period -
+     * but it prices a lost subscriber far better than a headcount does.
+     *
+     * @param  array<int, int>  $ids
+     * @return array<int, float>
+     */
+    private function lastPaymentPerSubscription(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $out = [];
+
+        // Ascending, so the last write per subscription is the newest order.
+        $orders = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('status', 'completed')
+            ->whereIn('subscription_id', $ids)
+            ->whereNotNull('date_created_gmt')
+            ->orderBy('date_created_gmt')
+            ->select('subscription_id', 'total_amount')
+            ->get();
+
+        foreach ($orders as $o) {
+            $out[(int) $o->subscription_id] = (float) $o->total_amount;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Every subscription grouped by customer, oldest first, for win-back lookups.
+     *
+     * @return array<string, array<int, array{id:int, created:string, status:string}>>
+     */
+    private function subscriptionsByCustomer(): array
+    {
+        $index = [];
+
+        $rows = $this->subscriptions()
+            ->whereNotNull('date_created_gmt')
+            ->select('id', 'billing_email', 'customer_id', 'date_created_gmt', 'status')
+            ->orderBy('date_created_gmt')
+            ->get();
+
+        foreach ($rows as $r) {
+            $key = $this->customerKey($r->billing_email, (int) ($r->customer_id ?? 0));
+
+            if ($key === null) {
+                continue;
+            }
+
+            $index[$key][] = [
+                'id' => (int) $r->id,
+                'created' => (string) $r->date_created_gmt,
+                'status' => (string) $r->status,
+            ];
+        }
+
+        return $index;
+    }
+
+    /** PHP twin of {@see customerKeyExpr()}, for in-memory grouping. */
+    private function customerKey(?string $email, int $customerId): ?string
+    {
+        $email = trim((string) $email);
+
+        if ($email !== '') {
+            return strtolower($email);
+        }
+
+        return $customerId > 0 ? 'cid:'.$customerId : null;
     }
 
     /**

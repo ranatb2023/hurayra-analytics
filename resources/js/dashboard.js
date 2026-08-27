@@ -38,7 +38,7 @@ export default (config = {}) => ({
 
     // The subscriptions behind the period's churn number, fetched on demand so
     // the dashboard does not pay for the list unless somebody opens it.
-    lost: { open: false, loading: false, error: null, rows: [], total: 0, returned: 0 },
+    lost: { open: false, loading: false, error: null, rows: [], total: 0, returned: 0, summary: {} },
 
     // One-time buyers who later subscribed (lifetime, independent of the filter).
     upsell: { rows: [], summary: {}, total: 0 },
@@ -158,7 +158,7 @@ export default (config = {}) => ({
         // The drill-down belongs to the period it was fetched for; drop it so a
         // filter change cannot leave last period's rows under this period's
         // count. Refetched only if the panel is still open.
-        this.lost = { ...this.lost, rows: [], total: 0, returned: 0, error: null };
+        this.lost = { ...this.lost, rows: [], total: 0, returned: 0, summary: {}, error: null };
         if (this.lost.open) this.fetchLost();
         this.$nextTick(() => { this.renderStatusDonut(); this.renderRevenueDonut(); });
     },
@@ -251,7 +251,13 @@ export default (config = {}) => ({
             // a claim, not an error state.
             if (!res.ok) throw new Error(`Could not load the list (HTTP ${res.status}).`);
             const data = await res.json();
-            this.lost = { ...this.lost, rows: data.rows ?? [], total: data.total ?? 0, returned: data.returned ?? 0 };
+            this.lost = {
+                ...this.lost,
+                rows: data.rows ?? [],
+                total: data.total ?? 0,
+                returned: data.returned ?? 0,
+                summary: data.summary ?? {},
+            };
         } catch (e) {
             this.lost.error = e.message;
         } finally {
@@ -261,6 +267,42 @@ export default (config = {}) => ({
 
     lostExportHref() {
         return `/api/metrics/churned-subscriptions/export?${this.filterParams().toString()}`;
+    },
+
+    lostSummary() {
+        return this.lost.summary ?? {};
+    },
+
+    /** When they came back: "switched", "next day", "29d later". */
+    returnLabel(r) {
+        if (r.returned === null) return 'unknown';
+        if (!r.returned) return '\u2014';
+        if (r.same_day_switch) return 'switched';
+        return r.days_to_return === 0 ? 'next day' : `${r.days_to_return}d later`;
+    },
+
+    /**
+     * Whether that comeback is still running. A win-back that has since
+     * cancelled again is not a recovered customer, so the two facts are shown
+     * separately rather than collapsed into one "returned" flag.
+     */
+    returnStateLabel(r) {
+        if (!r.returned || !r.returned_status) return '';
+        return r.returned_status === 'active' ? 'still active' : `now ${r.returned_status}`;
+    },
+
+    returnStateClass(r) {
+        return r.returned_status === 'active'
+            ? 'bg-emerald-50 text-emerald-700'
+            : 'bg-slate-100 text-slate-500';
+    },
+
+    returnBadgeClass(r) {
+        if (r.returned === null) return 'bg-slate-100 text-slate-400';
+        if (!r.returned) return 'text-slate-300';
+        // A same-day restart is a plan change, not a recovered customer.
+        if (r.same_day_switch) return 'bg-sky-50 text-sky-700';
+        return 'bg-emerald-50 text-emerald-700';
     },
 
     /** Short date for the drill-down table. */
