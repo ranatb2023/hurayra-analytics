@@ -9,9 +9,7 @@ use Illuminate\View\View;
 
 class DashboardController extends Controller
 {
-    public function __construct(private readonly MetricsService $metrics)
-    {
-    }
+    public function __construct(private readonly MetricsService $metrics) {}
 
     public function index(): View
     {
@@ -20,6 +18,7 @@ class DashboardController extends Controller
             'trendMetrics' => collect($this->metrics->trendMetrics())
                 ->map(fn ($spec, $key) => ['key' => $key, 'label' => $spec['label']])
                 ->values(),
+            'segmentDimensions' => MetricsService::SEGMENT_DIMENSIONS,
             'years' => $this->availableYears(),
         ]);
     }

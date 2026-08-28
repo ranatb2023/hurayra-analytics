@@ -6,6 +6,7 @@ use App\Models\Record;
 use App\Support\Period;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -81,6 +82,16 @@ class MetricsService
         'utm_source', 'utm_medium', 'utm_campaign', 'attribution_type',
         'device_type', 'coupon_code', 'billing_period', 'primary_product',
     ];
+
+    /**
+     * How many segments a split trend plots. Past half a dozen lines a chart
+     * stops being readable, so the tail is reported as a count rather than
+     * drawn -- and never silently dropped.
+     */
+    private const TREND_SEGMENTS = 6;
+
+    /** Segment label for rows carrying nothing in the split column. */
+    private const UNATTRIBUTED = 'Not recorded';
 
     /**
      * Tenure buckets for {@see tenureAtChurn()}, as [label, inclusive upper
@@ -380,21 +391,26 @@ class MetricsService
      * @param  string  $metric  one of the keys in {@see trendMetrics()}
      * @return array{labels: string[], values: array<int|float>, metric: string}
      */
-    public function trend(string $metric, string $granularity, ?Period $window = null): array
+    public function trend(string $metric, string $granularity, ?Period $window = null, ?string $breakdown = null): array
     {
         $metrics = $this->trendMetrics();
-        $spec = $metrics[$metric] ?? $metrics['new_subscribers'];
+        $key = isset($metrics[$metric]) ? $metric : 'new_subscribers';
+        $spec = $metrics[$key];
+
+        // Whitelisted: the column is interpolated into the SELECT below.
+        $breakdown = in_array($breakdown, self::SEGMENT_DIMENSIONS, true) ? $breakdown : null;
 
         $bucket = $this->bucketExpression($granularity);
 
         $query = DB::table('records')
             ->selectRaw("{$bucket} as bucket")
+            // Ranks the segments of a split. Every metric has one, including
+            // the ratios, whose own value says nothing about size.
+            ->selectRaw('COUNT(*) as segment_rows')
             ->whereNotNull('date_created_gmt');
 
-        if ($spec['type'] === 'sum') {
-            $query->selectRaw('COALESCE(SUM(total_amount), 0) as value');
-        } else {
-            $query->selectRaw('COUNT(*) as value');
+        foreach ($spec['select'] as $select) {
+            $query->selectRaw($select);
         }
 
         ($spec['where'])($query);
@@ -404,55 +420,217 @@ class MetricsService
                 ->where('date_created_gmt', '<', $window->end->toDateTimeString());
         }
 
-        $rows = $query->groupBy('bucket')->orderBy('bucket')->get();
+        $query->groupBy('bucket');
+
+        if ($breakdown !== null) {
+            // Rows carrying nothing are a real segment -- usually the biggest
+            // one -- so they are labelled rather than quietly dropped.
+            $query->selectRaw("COALESCE(NULLIF({$breakdown}, ''), ?) as segment", [self::UNATTRIBUTED])
+                ->groupBy('segment');
+        }
+
+        $rows = $query->orderBy('bucket')->get();
+
+        $labels = $rows->pluck('bucket')->map(fn ($b) => (string) $b)->unique()->values()->all();
+
+        $base = [
+            'metric' => $key,
+            'label' => $spec['label'],
+            'unit' => $spec['unit'],
+            'breakdown' => $breakdown,
+            'labels' => $labels,
+        ];
+
+        if ($breakdown === null) {
+            return $base + [
+                'values' => $rows->map(fn ($row) => ($spec['reduce'])($row))->all(),
+                'series' => [],
+                'other_segments' => 0,
+            ];
+        }
+
+        return $base + ['values' => []] + $this->splitSeries($rows, $labels, $spec);
+    }
+
+    /**
+     * Pivot grouped (bucket, segment) rows into one series per segment.
+     *
+     * Only the largest segments are plotted; the rest are counted so a capped
+     * chart cannot read as the whole picture. Small segments are not merged
+     * into an "Other" line -- summing two averages or two rates would invent a
+     * number that is in no row of the data.
+     *
+     * @param  Collection<int, object>  $rows
+     * @param  array<int, string>  $labels
+     * @param  array<string, mixed>  $spec
+     * @return array{series: array<int, array{label:string, values:array<int, ?float>}>, other_segments:int}
+     */
+    private function splitSeries($rows, array $labels, array $spec): array
+    {
+        $values = [];   // segment => bucket => value
+        $volume = [];   // segment => rows behind it, for ranking
+
+        foreach ($rows as $row) {
+            $segment = (string) $row->segment;
+            $values[$segment][(string) $row->bucket] = ($spec['reduce'])($row);
+            $volume[$segment] = ($volume[$segment] ?? 0) + (int) $row->segment_rows;
+        }
+
+        arsort($volume);
+        $top = array_slice(array_keys($volume), 0, self::TREND_SEGMENTS);
+
+        $series = [];
+
+        foreach ($top as $segment) {
+            $series[] = [
+                'label' => $segment,
+                // A bucket the segment has no rows in is a zero for a count or
+                // a sum, but a gap for an average: nothing was ordered, which
+                // is not an order worth nothing.
+                'values' => array_map(
+                    fn (string $bucket) => $values[$segment][$bucket] ?? $spec['empty'],
+                    $labels,
+                ),
+            ];
+        }
 
         return [
-            'metric' => $metric,
-            'labels' => $rows->pluck('bucket')->map(fn ($b) => (string) $b)->all(),
-            'values' => $rows->pluck('value')->map(fn ($v) => $spec['type'] === 'sum' ? (float) $v : (int) $v)->all(),
+            'series' => $series,
+            'other_segments' => max(0, count($volume) - count($top)),
         ];
     }
 
     /**
-     * Metrics offered for the trend chart, with their aggregate type and the
-     * WHERE clause that defines them.
+     * Metrics offered for the trend chart.
      *
-     * @return array<string, array{label: string, type: string, where: callable}>
+     * Every spec carries the same four things: the aggregates to select, a
+     * reducer turning one grouped row into the plotted number, the unit that
+     * number is in, and the filter that defines the metric. Counts, sums and
+     * ratios therefore share one query path, which is what lets an average or
+     * a rate be trended at all -- neither is expressible as a single aggregate.
+     *
+     * @return array<string, array{label:string, unit:string, select:array<int, string>, reduce:callable, empty:?float, where:callable}>
      */
     public function trendMetrics(): array
     {
+        // Trashed and draft orders are not business data anywhere else on the
+        // dashboard. Excluding them here too means a trend and the card above
+        // it are counting the same orders.
+        $orders = fn (Builder $q) => $q->where('record_type', 'shop_order')
+            ->whereNotIn('status', Record::EXCLUDED_ORDER_STATUSES);
+        $completed = fn (Builder $q) => $orders($q)->where('status', 'completed');
+        $renewals = fn (Builder $q) => $orders($q)->where('order_relationship', 'renewal');
+
         return [
-            'new_subscribers' => [
-                'label' => 'New Subscribers',
-                'type' => 'count',
-                'where' => fn (Builder $q) => $q->where('record_type', 'shop_subscription'),
+            'new_subscribers' => $this->countMetric(
+                'New Subscribers',
+                fn (Builder $q) => $q->where('record_type', 'shop_subscription'),
+            ),
+            'completed' => $this->countMetric('Completed Orders', $completed),
+
+            // What the business keeps. Listed above the gross line on purpose:
+            // gross carries VAT, shipping and refunded money, which is about a
+            // quarter of it, and it is the number people quote by accident.
+            'net_revenue' => [
+                'label' => 'Net Revenue (after refunds)',
+                'unit' => 'currency',
+                // `net_amount` is null on files exported before the column
+                // existed. Those buckets plot as a gap: falling back to gross
+                // would restore the very overstatement this metric removes,
+                // and a zero would claim a month earned nothing.
+                'select' => [
+                    'SUM(net_amount) as net',
+                    'COUNT(net_amount) as with_net',
+                    'COALESCE(SUM(refunded_amount), 0) as refunded',
+                ],
+                'reduce' => fn ($row) => (int) $row->with_net === 0
+                    ? null
+                    : round((float) $row->net - (float) $row->refunded, 2),
+                'empty' => null,
+                'where' => $completed,
             ],
-            'completed' => [
-                'label' => 'Completed Orders',
-                'type' => 'count',
-                'where' => fn (Builder $q) => $q->where('record_type', 'shop_order')->where('status', 'completed'),
-            ],
-            'total_revenue' => [
-                'label' => 'Revenue (completed)',
-                'type' => 'sum',
-                'where' => fn (Builder $q) => $q->where('record_type', 'shop_order')->where('status', 'completed'),
-            ],
-            'renewal_purchases' => [
-                'label' => 'Renewal Purchases',
-                'type' => 'count',
-                'where' => fn (Builder $q) => $q->where('record_type', 'shop_order')->where('order_relationship', 'renewal'),
-            ],
-            'one_time_purchase' => [
-                'label' => 'One-time Purchases',
-                'type' => 'count',
-                'where' => fn (Builder $q) => $q->where('record_type', 'shop_order')->where('order_relationship', 'one_time'),
-            ],
-            'subscription_purchases' => [
-                'label' => 'Subscription Purchases',
-                'type' => 'count',
-                'where' => fn (Builder $q) => $q->where('record_type', 'shop_order')
-                    ->whereIn('order_relationship', self::SUBSCRIPTION_PURCHASE_RELS),
-            ],
+
+            'total_revenue' => $this->sumMetric('Revenue (gross)', 'total_amount', $completed),
+            'average_order_value' => $this->ratioMetric(
+                'Average Order Value', 'SUM(total_amount)', 'COUNT(*)', 'currency', $completed,
+            ),
+            'refunded' => $this->sumMetric('Refunds', 'refunded_amount', $completed),
+
+            // The leading indicator of involuntary churn: a card renewal that
+            // fails is a subscriber lost some weeks before the cancellation
+            // shows up in the churn rate.
+            'renewal_success_rate' => $this->ratioMetric(
+                'Renewal Success Rate',
+                "SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END)",
+                'COUNT(*)',
+                'percent',
+                $renewals,
+            ),
+
+            'renewal_purchases' => $this->countMetric('Renewal Purchases', $renewals),
+            'one_time_purchase' => $this->countMetric(
+                'One-time Purchases',
+                fn (Builder $q) => $orders($q)->where('order_relationship', 'one_time'),
+            ),
+            'subscription_purchases' => $this->countMetric(
+                'Subscription Purchases',
+                fn (Builder $q) => $orders($q)->whereIn('order_relationship', self::SUBSCRIPTION_PURCHASE_RELS),
+            ),
+        ];
+    }
+
+    /** A trend metric that counts the rows matching its filter. */
+    private function countMetric(string $label, callable $where): array
+    {
+        return [
+            'label' => $label,
+            'unit' => 'count',
+            'select' => ['COUNT(*) as v'],
+            'reduce' => fn ($row) => (int) $row->v,
+            'empty' => 0.0,
+            'where' => $where,
+        ];
+    }
+
+    /** A trend metric that sums one column over the rows matching its filter. */
+    private function sumMetric(string $label, string $column, callable $where): array
+    {
+        return [
+            'label' => $label,
+            'unit' => 'currency',
+            'select' => ["COALESCE(SUM({$column}), 0) as v"],
+            'reduce' => fn ($row) => round((float) $row->v, 2),
+            'empty' => 0.0,
+            'where' => $where,
+        ];
+    }
+
+    /**
+     * A trend metric that divides one aggregate by another.
+     *
+     * An empty denominator plots as a gap rather than a zero: a month with no
+     * renewals due has no renewal success rate, and drawing it at 0% would
+     * report a total failure that never happened.
+     */
+    private function ratioMetric(
+        string $label,
+        string $numerator,
+        string $denominator,
+        string $unit,
+        callable $where,
+    ): array {
+        $scale = $unit === 'percent' ? 100 : 1;
+        $places = $unit === 'percent' ? 1 : 2;
+
+        return [
+            'label' => $label,
+            'unit' => $unit,
+            'select' => ["{$numerator} as num", "{$denominator} as den"],
+            'reduce' => fn ($row) => (float) $row->den > 0
+                ? round((float) $row->num / (float) $row->den * $scale, $places)
+                : null,
+            'empty' => null,
+            'where' => $where,
         ];
     }
 
@@ -466,7 +644,7 @@ class MetricsService
      * the same answer for March that it gives today.
      *
      * @param  int  $months  how many trailing months to return (1–60)
-     * @return array{rows: array<int, array{month:string, active_start:int, new:int, churned:int, active_end:int, churn_rate:?float}>, end_date_coverage: ?float}
+     * @return array{rows: array<int, array{month:string, active_start:int, new:int, churned:int, active_end:int, churn_rate:?float, partial:bool}>, end_date_coverage: ?float}
      */
     public function churnSeries(int $months = self::CHURN_SERIES_MONTHS): array
     {
@@ -488,17 +666,16 @@ class MetricsService
             return ['rows' => [], 'end_date_coverage' => null];
         }
 
-        // Anchor on the newest activity in the data rather than "now", so a
-        // dataset that stops in June does not trail empty months.
-        $latest = (string) DB::table('records')->max('date_created_gmt');
-        $lastMonth = CarbonImmutable::parse($latest !== '' ? $latest : 'now')->startOfMonth();
+        $latest = $this->latestDataInstant();
+        $lastMonth = $latest->startOfMonth();
         $firstMonth = $lastMonth->subMonths($months - 1);
 
         $rows = [];
 
         for ($cursor = $firstMonth; $cursor <= $lastMonth; $cursor = $cursor->addMonth()) {
+            $monthEnd = $cursor->addMonth();
             $startS = $cursor->toDateTimeString();
-            $endS = $cursor->addMonth()->toDateTimeString();
+            $endS = $monthEnd->toDateTimeString();
 
             $activeStart = 0;
             $activeEnd = 0;
@@ -528,6 +705,10 @@ class MetricsService
                 'churned' => $churned,
                 'active_end' => $activeEnd,
                 'churn_rate' => $activeStart > 0 ? round($churned / $activeStart * 100, 1) : null,
+                // The month the data stops inside is only counted up to the
+                // last row imported. Charting it undashed draws a cliff that is
+                // missing rows, not lost subscribers.
+                'partial' => $latest->lt($monthEnd),
             ];
         }
 
@@ -566,7 +747,7 @@ class MetricsService
      * is walked in memory.
      *
      * @param  int  $months  trailing months to return (1-60)
-     * @return array{rows: array<int, array{month:string, churn_net:?float, nrr:?float}>}
+     * @return array{rows: array<int, array{month:string, churn_net:?float, nrr:?float, partial:bool}>}
      */
     public function retentionSeries(int $months = self::CHURN_SERIES_MONTHS): array
     {
@@ -602,15 +783,16 @@ class MetricsService
             $payments[(int) $o->subscription_id][] = [(string) $o->date_created_gmt, (float) $o->total_amount];
         }
 
-        $latest = (string) DB::table('records')->max('date_created_gmt');
-        $lastMonth = CarbonImmutable::parse($latest !== '' ? $latest : 'now')->startOfMonth();
+        $latest = $this->latestDataInstant();
+        $lastMonth = $latest->startOfMonth();
         $firstMonth = $lastMonth->subMonths($months - 1);
 
         $rows = [];
 
         for ($cursor = $firstMonth; $cursor <= $lastMonth; $cursor = $cursor->addMonth()) {
+            $monthEnd = $cursor->addMonth();
             $startS = $cursor->toDateTimeString();
-            $endS = $cursor->addMonth()->toDateTimeString();
+            $endS = $monthEnd->toDateTimeString();
 
             $activeStart = 0;
             $churned = 0;
@@ -660,10 +842,58 @@ class MetricsService
                 'month' => $cursor->format('Y-m'),
                 'churn_net' => $activeStart > 0 ? round($real / $activeStart * 100, 1) : null,
                 'nrr' => $base > 0 ? round($retained / $base * 100, 1) : null,
+                'partial' => $latest->lt($monthEnd),
             ];
         }
 
         return ['rows' => $rows];
+    }
+
+    /**
+     * The monthly history the growth and retention charts are drawn from:
+     * {@see churnSeries()} joined to {@see retentionSeries()} on the month.
+     *
+     * The two walks answer different halves of the same question -- one the
+     * subscriber count, the other the rates -- and every chart wants both. One
+     * endpoint returning one row per month keeps the charts and the history
+     * table reading from a single series, so a figure cannot differ between
+     * the picture and the table under it.
+     *
+     * @param  int  $months  trailing months to return (1-60)
+     * @return array{rows: array<int, array<string, mixed>>, end_date_coverage: ?float}
+     */
+    public function history(int $months = self::CHURN_SERIES_MONTHS): array
+    {
+        $churn = $this->churnSeries($months);
+        $rates = array_column($this->retentionSeries($months)['rows'], null, 'month');
+
+        $rows = array_map(function (array $row) use ($rates) {
+            $rate = $rates[$row['month']] ?? [];
+
+            return $row + [
+                'churn_net' => $rate['churn_net'] ?? null,
+                'nrr' => $rate['nrr'] ?? null,
+            ];
+        }, $churn['rows']);
+
+        return [
+            'rows' => $rows,
+            'end_date_coverage' => $churn['end_date_coverage'],
+        ];
+    }
+
+    /**
+     * The newest activity in the data.
+     *
+     * Every month walk anchors here rather than on "now", so a dataset that
+     * stops in June does not trail empty months -- and the month this instant
+     * falls inside is the one that is still filling up.
+     */
+    private function latestDataInstant(): CarbonImmutable
+    {
+        $latest = (string) DB::table('records')->max('date_created_gmt');
+
+        return CarbonImmutable::parse($latest !== '' ? $latest : 'now');
     }
 
     /**

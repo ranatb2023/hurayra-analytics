@@ -182,4 +182,48 @@ class SubscriberHistoryTest extends TestCase
             ->assertJsonPath('rows.0.month', '2026-02')
             ->assertJsonCount(6, 'rows');
     }
+
+    public function test_the_month_the_data_stops_inside_is_flagged_as_partial(): void
+    {
+        // The newest record is 4 July, so July is still filling up and every
+        // month before it is closed. Charting July as a finished month draws a
+        // fall that is only missing rows.
+        $rows = collect($this->metrics->churnSeries(6)['rows'])->keyBy('month');
+
+        $this->assertTrue($rows['2026-07']['partial']);
+
+        foreach (['2026-02', '2026-03', '2026-04', '2026-05', '2026-06'] as $month) {
+            $this->assertFalse($rows[$month]['partial'], "{$month} should be closed");
+        }
+    }
+
+    public function test_history_joins_the_rate_series_onto_the_subscriber_months(): void
+    {
+        $history = collect($this->metrics->history(6)['rows'])->keyBy('month');
+        $churn = collect($this->metrics->churnSeries(6)['rows'])->keyBy('month');
+        $rates = collect($this->metrics->retentionSeries(6)['rows'])->keyBy('month');
+
+        $this->assertSame($churn->keys()->all(), $history->keys()->all());
+
+        foreach ($history as $month => $row) {
+            // One row per month carrying both walks, so a chart and the table
+            // under it cannot disagree about the same month.
+            $this->assertSame($churn[$month]['active_end'], $row['active_end']);
+            $this->assertSame($churn[$month]['churn_rate'], $row['churn_rate']);
+            $this->assertSame($rates[$month]['churn_net'], $row['churn_net']);
+            $this->assertSame($rates[$month]['nrr'], $row['nrr']);
+        }
+    }
+
+    public function test_history_endpoint_returns_the_merged_series(): void
+    {
+        $response = $this->getJson('/api/metrics/history?months=6');
+
+        $response->assertOk()
+            ->assertJsonCount(6, 'rows')
+            ->assertJsonPath('rows.0.month', '2026-02')
+            ->assertJsonPath('rows.5.partial', true)
+            ->assertJsonStructure(['rows' => [['month', 'active_start', 'new', 'churned', 'active_end',
+                'churn_rate', 'partial', 'churn_net', 'nrr']], 'end_date_coverage']);
+    }
 }

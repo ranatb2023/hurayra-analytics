@@ -20,6 +20,7 @@ Route::get('/api/metrics/segments', [MetricsController::class, 'segments'])->nam
 Route::get('/api/metrics/renewals', [MetricsController::class, 'upcomingRenewals'])->name('metrics.renewals');
 Route::get('/api/metrics/renewals/export', [MetricsController::class, 'upcomingRenewalsExport'])->name('metrics.renewals.export');
 Route::get('/api/metrics/cohort-value', [MetricsController::class, 'cohortValue'])->name('metrics.cohort_value');
+Route::get('/api/metrics/history', [MetricsController::class, 'history'])->name('metrics.history');
 Route::get('/api/metrics/churn', [MetricsController::class, 'churn'])->name('metrics.churn');
 Route::get('/api/metrics/churned-subscriptions', [MetricsController::class, 'churnedSubscriptions'])->name('metrics.churned_subscriptions');
 Route::get('/api/metrics/churned-subscriptions/export', [MetricsController::class, 'churnedSubscriptionsExport'])->name('metrics.churned_subscriptions.export');

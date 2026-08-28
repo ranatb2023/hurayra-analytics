@@ -36,6 +36,7 @@ class MetricsController extends Controller
         $request->validate([
             'metric' => ['required', 'string'],
             'granularity' => ['required', 'in:week,month,year,custom'],
+            'breakdown' => ['nullable', 'in:'.implode(',', MetricsService::SEGMENT_DIMENSIONS)],
         ]);
 
         // The trend spans all data unless a custom window is supplied.
@@ -52,6 +53,7 @@ class MetricsController extends Controller
             $request->string('metric')->toString(),
             $request->string('granularity')->toString(),
             $window,
+            $request->filled('breakdown') ? $request->string('breakdown')->toString() : null,
         ));
     }
 
@@ -222,6 +224,20 @@ class MetricsController extends Controller
                 ]);
             }
         }, 'hurayra-audience-'.$key.'.csv', ['Content-Type' => 'text/csv']);
+    }
+
+    /**
+     * AJAX endpoint: the monthly series behind the growth and retention charts.
+     *
+     * A superset of {@see churn()} -- same rows, plus net churn and NRR per
+     * month -- so the charts and the history table under them are drawn from
+     * one fetch and cannot disagree.
+     */
+    public function history(Request $request): JsonResponse
+    {
+        $months = min(60, max(1, (int) $request->integer('months', 12)));
+
+        return response()->json($this->metrics->history($months));
     }
 
     /** AJAX endpoint: month-by-month subscriber history and churn rate. */

@@ -16,6 +16,8 @@ export default (config = {}) => ({
     strict: false,
     trendMetric: 'new_subscribers',
     trendType: 'line',
+    trendBreakdown: '',   // '' = one line; otherwise an attribution column
+    trendOther: 0,        // segments the split left unplotted
     openDropdown: null, // id of the currently open custom dropdown
 
     // Which view is on screen. The rail switches this rather than navigating,
@@ -37,6 +39,9 @@ export default (config = {}) => ({
     chart: null,
     statusChart: null,
     revenueChart: null,
+    growthChart: null,
+    churnRateChart: null,
+    nrrChart: null,
     sparks: {},
     topCustomers: [],
     // Shaped, not null: x-show hides a section but still evaluates the
@@ -134,6 +139,13 @@ export default (config = {}) => ({
 
     trendOptions() {
         return (config.trendMetrics ?? []).map((m) => ({ value: m.key, label: m.label }));
+    },
+
+    /** Any metric can be split by any attribution column travelling on a row. */
+    breakdownOptions() {
+        return [{ value: '', label: 'No split' }].concat(
+            (config.segmentDimensions ?? []).map((d) => ({ value: d, label: `By ${this.dimensionLabel(d).toLowerCase()}` })),
+        );
     },
 
     /** Resolve the display label for the currently selected value. */
@@ -313,10 +325,13 @@ export default (config = {}) => ({
 
     async fetchChurn() {
         try {
-            const res = await fetch('/api/metrics/churn?months=12', { headers: { Accept: 'application/json' } });
+            // /history is /churn plus net churn and NRR per month: the charts
+            // and the table below them read from the same rows.
+            const res = await fetch('/api/metrics/history?months=12', { headers: { Accept: 'application/json' } });
             if (res.ok) {
                 const data = await res.json();
                 this.churn = { rows: data.rows ?? [], coverage: data.end_date_coverage ?? null };
+                this.$nextTick(() => this.renderHistoryCharts());
             }
         } catch (_) { /* non-critical */ }
     },
@@ -533,6 +548,7 @@ export default (config = {}) => ({
             p.set('from', this.from);
             p.set('to', this.to);
         }
+        if (this.trendBreakdown) p.set('breakdown', this.trendBreakdown);
         const res = await fetch(`/api/metrics/trend?${p.toString()}`, {
             headers: { Accept: 'application/json' },
         });
@@ -541,10 +557,40 @@ export default (config = {}) => ({
         this.renderChart(data);
     },
 
+    // Split-trend series colours, in plotting order (brand palette).
+    seriesColors: ['#d46681', '#61bac0', '#e4b450', '#4a9aa0', '#a23e58', '#94a3b8'],
+
+    /** A trend value in its own unit — money, a rate, or a plain count. */
+    trendValueLabel(v, unit) {
+        if (v === null || v === undefined) return '—';
+        if (unit === 'currency') return this.money(v);
+        if (unit === 'percent') return `${v}%`;
+        return new Intl.NumberFormat().format(v);
+    },
+
+    /** The same, shortened: an axis has no room for £4,984.16 twelve times. */
+    axisLabel(v, unit) {
+        if (unit === 'currency') {
+            return new Intl.NumberFormat('en-GB', {
+                style: 'currency', currency: 'GBP', notation: 'compact', maximumFractionDigits: 1,
+            }).format(v || 0);
+        }
+        if (unit === 'percent') return `${v}%`;
+        return new Intl.NumberFormat('en-GB', { notation: 'compact' }).format(v || 0);
+    },
+
     renderChart(data) {
         const ctx = this.$refs.trendCanvas;
         if (!ctx) return;
-        const label = this.trendMetricLabel();
+
+        const unit = data.unit ?? 'count';
+        // One shape either way: an unsplit trend is a single series.
+        const series = (data.series ?? []).length
+            ? data.series
+            : [{ label: data.label ?? this.trendMetricLabel(), values: data.values ?? [] }];
+        const split = !!data.breakdown;
+
+        this.trendOther = data.other_segments ?? 0;
 
         // Recreate rather than mutate config.type — changing a chart's type at
         // runtime is unreliable in Chart.js v4.
@@ -557,22 +603,42 @@ export default (config = {}) => ({
             type: this.trendType,
             data: {
                 labels: data.labels,
-                datasets: [{
-                    label,
-                    data: data.values,
-                    borderColor: '#d46681',
-                    backgroundColor: 'rgba(212, 102, 129, 0.22)',
-                    tension: 0.3,
-                    fill: true,
-                    borderWidth: 2,
-                    pointRadius: 3,
-                }],
+                datasets: series.map((s, i) => {
+                    const color = this.seriesColors[i % this.seriesColors.length];
+
+                    return {
+                        label: s.label,
+                        data: s.values,
+                        borderColor: color,
+                        backgroundColor: split ? color : 'rgba(212, 102, 129, 0.22)',
+                        tension: 0.3,
+                        // One line reads well as an area; six areas drawn over
+                        // each other read as mud.
+                        fill: !split,
+                        borderWidth: 2,
+                        pointRadius: split ? 2 : 3,
+                        // Ratios and net revenue are null where the month has
+                        // no denominator; join across rather than break.
+                        spanGaps: true,
+                    };
+                }),
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { display: true } },
-                scales: { y: { beginAtZero: true } },
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: true, labels: { boxWidth: 10, usePointStyle: true } },
+                    tooltip: {
+                        callbacks: { label: (c) => `${c.dataset.label}: ${this.trendValueLabel(c.parsed.y, unit)}` },
+                    },
+                },
+                scales: {
+                    x: { grid: { display: false } },
+                    // A rate lives in a narrow band near its own level; forcing
+                    // its axis to zero flattens every move that matters.
+                    y: { beginAtZero: unit !== 'percent', ticks: { callback: (v) => this.axisLabel(v, unit) } },
+                },
             },
         });
     },
@@ -701,8 +767,226 @@ export default (config = {}) => ({
      */
     renderChartsFor(view) {
         this.$nextTick(() => {
-            if (view === 'overview') this.renderTrend?.();
+            if (view === 'overview') this.fetchTrend().catch(() => {});
             if (view === 'revenue') this.renderRevenueDonut();
+            if (view === 'subscribers' || view === 'retention') this.renderHistoryCharts();
+        });
+    },
+
+    // --- monthly history charts (growth, churn rate, NRR) ---
+    historyRows() {
+        return this.churn.rows ?? [];
+    },
+
+    historyLabels() {
+        return this.historyRows().map((r) => this.cohortMonthLabel(r.month));
+    },
+
+    /** The trailing month, when the data stops part-way through it. */
+    partialMonthLabel() {
+        const rows = this.historyRows();
+        const last = rows[rows.length - 1];
+        return last?.partial ? this.cohortMonthLabel(last.month) : null;
+    },
+
+    /**
+     * Dash the final segment of a line when that month is still filling up.
+     * The point is real but incomplete; drawn solid it reads as a collapse.
+     */
+    partialSegment() {
+        const rows = this.historyRows();
+        const last = rows.length - 1;
+        return {
+            borderDash: (ctx) => (last >= 0 && rows[last]?.partial && ctx.p1DataIndex === last ? [5, 4] : undefined),
+        };
+    },
+
+    /** Bars get the same treatment as the dashed segment: faded, not missing. */
+    barColors(solid, faded) {
+        return this.historyRows().map((r) => (r.partial ? faded : solid));
+    },
+
+    /** Shared axis styling for the two percentage charts. */
+    percentScales(beginAtZero) {
+        return {
+            x: { grid: { display: false } },
+            y: { beginAtZero, ticks: { callback: (v) => `${v}%` } },
+        };
+    },
+
+    renderHistoryCharts() {
+        this.renderGrowthChart();
+        this.renderChurnRateChart();
+        this.renderNrrChart();
+    },
+
+    /**
+     * The growth engine in one picture: sign-ups above the axis, losses below,
+     * and the size of the book they add up to as a line on its own scale.
+     */
+    renderGrowthChart() {
+        const ctx = this.$refs.growthCanvas;
+        const rows = this.historyRows();
+        if (!ctx || !rows.length) return;
+
+        if (this.growthChart) this.growthChart.destroy();
+        this.growthChart = new window.Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: this.historyLabels(),
+                datasets: [
+                    {
+                        label: 'Active at month end',
+                        type: 'line',
+                        data: rows.map((r) => r.active_end),
+                        yAxisID: 'level',
+                        borderColor: '#334155',
+                        backgroundColor: '#334155',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 2,
+                        segment: this.partialSegment(),
+                        order: 0,
+                    },
+                    {
+                        label: 'New',
+                        data: rows.map((r) => r.new),
+                        backgroundColor: this.barColors('#61bac0', 'rgba(97, 186, 192, 0.35)'),
+                        borderRadius: 3,
+                        order: 1,
+                    },
+                    {
+                        // Below the axis on purpose: the month's gain and loss
+                        // read as one shape instead of two columns to subtract.
+                        label: 'Churned',
+                        data: rows.map((r) => -r.churned),
+                        backgroundColor: this.barColors('#d46681', 'rgba(212, 102, 129, 0.35)'),
+                        borderRadius: 3,
+                        order: 1,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: true, labels: { boxWidth: 10, usePointStyle: true } },
+                    // Churn is plotted negative; reporting it that way in the
+                    // tooltip would read as a negative number of people.
+                    tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${Math.abs(c.parsed.y)}` } },
+                },
+                scales: {
+                    x: { stacked: true, grid: { display: false } },
+                    y: { stacked: true, title: { display: true, text: 'New / churned' } },
+                    level: {
+                        position: 'right',
+                        beginAtZero: true,
+                        grid: { display: false },
+                        title: { display: true, text: 'Active' },
+                    },
+                },
+            },
+        });
+    },
+
+    /** Monthly churn: real losses solid, gross (incl. never-billed) dashed. */
+    renderChurnRateChart() {
+        const ctx = this.$refs.churnRateCanvas;
+        const rows = this.historyRows();
+        if (!ctx || !rows.length) return;
+
+        if (this.churnRateChart) this.churnRateChart.destroy();
+        this.churnRateChart = new window.Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: this.historyLabels(),
+                datasets: [
+                    {
+                        label: 'Real churn',
+                        data: rows.map((r) => r.churn_net),
+                        borderColor: '#d46681',
+                        backgroundColor: 'rgba(212, 102, 129, 0.15)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 2,
+                        spanGaps: true,
+                        segment: this.partialSegment(),
+                    },
+                    {
+                        label: 'Gross',
+                        data: rows.map((r) => r.churn_rate),
+                        borderColor: '#cbd5e1',
+                        borderDash: [4, 3],
+                        borderWidth: 1.5,
+                        fill: false,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        spanGaps: true,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: true, labels: { boxWidth: 10, usePointStyle: true } },
+                    tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y}%` } },
+                },
+                scales: this.percentScales(true),
+            },
+        });
+    },
+
+    /** NRR against the 100% line: below it the book leaks faster than it grows. */
+    renderNrrChart() {
+        const ctx = this.$refs.nrrCanvas;
+        const rows = this.historyRows();
+        if (!ctx || !rows.length) return;
+
+        if (this.nrrChart) this.nrrChart.destroy();
+        this.nrrChart = new window.Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: this.historyLabels(),
+                datasets: [
+                    {
+                        label: 'Net revenue retention',
+                        data: rows.map((r) => r.nrr),
+                        borderColor: '#61bac0',
+                        backgroundColor: 'rgba(97, 186, 192, 0.16)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 2,
+                        spanGaps: true,
+                        segment: this.partialSegment(),
+                    },
+                    {
+                        label: 'Break-even',
+                        data: rows.map(() => 100),
+                        borderColor: '#94a3b8',
+                        borderDash: [4, 3],
+                        borderWidth: 1.5,
+                        fill: false,
+                        pointRadius: 0,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: true, labels: { boxWidth: 10, usePointStyle: true } },
+                    tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y}%` } },
+                },
+                // Not zero-based: NRR lives near 100, and a 0-100 axis flattens
+                // every move that matters into one straight line.
+                scales: this.percentScales(false),
+            },
         });
     },
 

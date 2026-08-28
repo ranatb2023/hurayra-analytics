@@ -143,7 +143,7 @@
 {{-- Block form, not @section(name, value): the inline form compiles its second
      argument as a PHP string, so the {{ }} echoes inside it never run. Js::from
      escapes for an HTML attribute, so this is safe inside x-data="…". --}}
-@section('app_data')dashboard({ defaultYear: {{ (int) $years[0] }}, trendMetrics: {{ \Illuminate\Support\Js::from($trendMetrics) }}, years: {{ \Illuminate\Support\Js::from($years) }}, directions: {{ \Illuminate\Support\Js::from($directions) }} })@endsection
+@section('app_data')dashboard({ defaultYear: {{ (int) $years[0] }}, trendMetrics: {{ \Illuminate\Support\Js::from($trendMetrics) }}, segmentDimensions: {{ \Illuminate\Support\Js::from($segmentDimensions) }}, years: {{ \Illuminate\Support\Js::from($years) }}, directions: {{ \Illuminate\Support\Js::from($directions) }} })@endsection
 
 @section('topbar')
     <div class="min-w-0 flex-1">
@@ -250,9 +250,21 @@
                             'id' => 'trendMetric', 'model' => 'trendMetric', 'options' => 'trendOptions()',
                             'onChange' => 'fetchTrend()', 'width' => 'w-44', 'compact' => true,
                         ])
+                        {{-- Any metric, split by any attribution column on the row:
+                             "is this channel decaying" is a question the segment
+                             snapshot cannot answer. --}}
+                        @include('dashboard.partials.dropdown', [
+                            'id' => 'trendBreakdown', 'model' => 'trendBreakdown', 'options' => 'breakdownOptions()',
+                            'onChange' => 'fetchTrend()', 'width' => 'w-36', 'compact' => true,
+                        ])
                     </div>
                 </div>
                 <div class="h-64"><canvas x-ref="trendCanvas"></canvas></div>
+                {{-- A capped chart must never read as the whole picture. --}}
+                <p x-show="trendOther > 0" x-cloak class="mt-2 text-xs text-slate-500">
+                    Six biggest shown · <span class="font-semibold text-slate-600" x-text="trendOther"></span>
+                    smaller values are not plotted.
+                </p>
             </div>
 
             <div class="rounded-xl border border-slate-200/80 bg-white p-5 shadow-sm">
@@ -342,6 +354,25 @@
         @foreach ($stateChips as $key => $c)
             @include('dashboard.partials.stat-chip', ['key' => $key, 'm' => $c])
         @endforeach
+    </div>
+
+    {{-- The growth engine. The cards above are one period; this is the shape of
+         the whole year, and it is the only place the book's size is visible as
+         a movement rather than a number. --}}
+    <div class="mt-4 print-block rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm"
+         x-show="churn.rows.length" x-cloak>
+        <h3 class="text-sm font-bold text-slate-700">
+            Subscriber Growth <span class="font-medium text-slate-400">· last 12 months</span>
+        </h3>
+        <p class="mt-1 text-xs text-slate-500">
+            Sign-ups above the line, subscribers lost below it, and the size of the book at each month's end.
+            When the pink bar is longer than the teal one, the book shrank that month.
+        </p>
+        <div class="mt-4 h-72"><canvas x-ref="growthCanvas"></canvas></div>
+        <p x-show="partialMonthLabel()" x-cloak class="mt-2 text-xs text-amber-700">
+            <span class="font-semibold" x-text="partialMonthLabel()"></span> is still filling up — its bars and the
+            dashed segment count a partial month, not a fall.
+        </p>
     </div>
 
     {{-- Set apart deliberately: these follow one intake forward in time, so they
@@ -573,6 +604,38 @@
         </template>
     </div>
 
+    {{-- The two rates the book turns on. Separate panels rather than one
+         dual-axis chart: churn moves in single digits and NRR sits near 100,
+         so sharing a scale would flatten one of them into a straight line. --}}
+    <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2" x-show="churn.rows.length" x-cloak>
+        <div class="print-block rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm">
+            <h3 class="text-sm font-bold text-slate-700">
+                Churn Rate <span class="font-medium text-slate-400">· last 12 months</span>
+            </h3>
+            <p class="mt-1 text-xs text-slate-500">
+                Real churn (solid) leaves out subscriptions that ended having never been billed — a broken checkout,
+                not a lost customer. The dashed line is the gross rate those are still counted in.
+            </p>
+            <div class="mt-4 h-64"><canvas x-ref="churnRateCanvas"></canvas></div>
+        </div>
+
+        <div class="print-block rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm">
+            <h3 class="text-sm font-bold text-slate-700">
+                Net Revenue Retention <span class="font-medium text-slate-400">· last 12 months</span>
+            </h3>
+            <p class="mt-1 text-xs text-slate-500">
+                What last month's subscribers are still worth this month. Above the 100% line the book grows without a
+                single new sign-up; below it, acquisition is refilling a bucket that leaks.
+            </p>
+            <div class="mt-4 h-64"><canvas x-ref="nrrCanvas"></canvas></div>
+        </div>
+    </div>
+
+    <p x-show="partialMonthLabel()" x-cloak class="mt-2 text-xs text-amber-700">
+        <span class="font-semibold" x-text="partialMonthLabel()"></span> is still filling up — the dashed final segment
+        counts a partial month.
+    </p>
+
     {{-- Month-by-month subscriber history --}}
     <div class="mt-4 print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm" x-show="churn.rows.length" x-cloak>
         <div class="border-b border-slate-100 p-5">
@@ -609,7 +672,14 @@
                 <tbody class="divide-y divide-slate-100">
                     <template x-for="row in churnRows()" :key="row.month">
                         <tr class="transition hover:bg-slate-50/60">
-                            <td class="px-5 py-2.5 font-medium text-slate-700" x-text="cohortMonthLabel(row.month)"></td>
+                            <td class="whitespace-nowrap px-5 py-2.5 font-medium text-slate-700">
+                                <span x-text="cohortMonthLabel(row.month)"></span>
+                                {{-- The month the data stops in is counted up to the last row imported. --}}
+                                <span x-show="row.partial" x-cloak
+                                      class="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                                    in progress
+                                </span>
+                            </td>
                             <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="row.active_start"></td>
                             <td class="px-5 py-2.5 text-right tabular-nums font-semibold text-emerald-600" x-text="row.new"></td>
                             <td class="px-5 py-2.5 text-right tabular-nums font-semibold text-rose-600" x-text="row.churned"></td>
