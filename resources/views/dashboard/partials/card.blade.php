@@ -1,29 +1,70 @@
 {{--
-    A single premium KPI tile (horizontal layout — fills wide columns cleanly).
-    Expects: $key, $label, $icon (svg path "d"), $bar (gradient classes e.g. "from-indigo-400 to-violet-500").
-    Reads its value/comparison from the Alpine `dashboard` scope.
+    Tier-1 KPI card: a number you would act on.
+
+    Expects $key and a $m definition (see the metric table in index.blade.php):
+    label, icon, dir, note, help. Optional $action = Alpine expression to run on
+    click, which makes the whole card a button.
+
+    Colour is semantic, never decorative: the icon tint says whether the metric
+    is a good thing or a bad thing, so a reader can rank a section without
+    reading it. Anything neutral stays grey.
 --}}
 @php
-    $icon ??= 'M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z';
-    $bar ??= 'from-slate-300 to-slate-400';
-    // Optional caption under the value, given as an Alpine expression. Used to
-    // spell out what a number measures when the label alone is ambiguous.
-    $note ??= null;
+    $m = $m ?? [];
+    $label = $m['label'] ?? ($label ?? '');
+    $icon = $m['icon'] ?? '';
+    $dir = $m['dir'] ?? 'flat';
+    $note = $m['note'] ?? null;
+    $help = $m['help'] ?? null;
+    $action = $action ?? null;
+
+    $tint = match ($dir) {
+        'good' => 'bg-emerald-50 text-emerald-600',
+        'bad' => 'bg-rose-50 text-rose-600',
+        default => 'bg-slate-100 text-slate-500',
+    };
 @endphp
-<div class="group flex items-center gap-4 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300/70 hover:shadow-lg hover:shadow-slate-200/60">
-    <span class="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-linear-to-br {{ $bar }} text-white shadow-md transition group-hover:scale-105">
-        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor">
+<{{ $action ? 'button' : 'div' }}
+    @if ($action) type="button" @click="{{ $action }}" @endif
+    class="group relative flex w-full items-center gap-4 rounded-xl border border-slate-200/80 bg-white p-4 text-left shadow-sm transition duration-200 hover:border-slate-300 hover:shadow-md">
+
+    <span class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg {{ $tint }}">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="{{ $icon }}" />
         </svg>
     </span>
 
     <div class="min-w-0 flex-1">
-        <dt class="truncate text-[13px] font-medium text-slate-500">{{ $label }}</dt>
+        <dt class="flex items-center gap-1 text-[13px] font-medium text-slate-500">
+            <span class="truncate">{{ $label }}</span>
+            @if ($help)
+                {{-- The explanation lives on the number it explains. --}}
+                <span class="relative shrink-0" x-data="{ tip: false }"
+                      @mouseenter="tip = true" @mouseleave="tip = false">
+                    <svg class="h-3.5 w-3.5 text-slate-300 transition hover:text-slate-500" fill="none"
+                         viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                              d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" />
+                    </svg>
+                    <span x-show="tip" x-cloak
+                          class="absolute left-1/2 top-6 z-30 w-64 -translate-x-1/2 rounded-lg bg-slate-800 px-3 py-2 text-[11px] font-normal leading-relaxed text-white shadow-xl">
+                        {{ $help }}
+                    </span>
+                </span>
+            @endif
+        </dt>
         <dd class="mt-0.5 text-[26px] font-bold leading-tight tracking-tight text-slate-900" x-text="value('{{ $key }}')"></dd>
         @if ($note)
             <p class="mt-0.5 truncate text-[11px] text-slate-400" x-text="{{ $note }}"></p>
         @endif
     </div>
+
+    @if ($action)
+        <svg class="h-4 w-4 shrink-0 self-center text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500"
+             fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+        </svg>
+    @endif
 
     <span x-show="compare" x-cloak
           :class="changeBadgeClass('{{ $key }}')"
@@ -31,4 +72,4 @@
         <span x-text="changeArrow('{{ $key }}')"></span>
         <span x-text="changeLabel('{{ $key }}')"></span>
     </span>
-</div>
+</{{ $action ? 'button' : 'div' }}>

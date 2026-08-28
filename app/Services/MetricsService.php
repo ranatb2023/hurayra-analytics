@@ -58,12 +58,29 @@ class MetricsService
     private const CHURN_SERIES_MONTHS = 12;
 
     /**
-     * Days without a completed order before an `on-hold` subscription is read as
-     * dormant. A monthly cycle plus a fortnight of retry: past this the payment
-     * is not coming back on its own, but the subscription never becomes churn
-     * because nothing moves it to a terminal status.
+     * How many billing cycles an `on-hold` subscription may miss before it is
+     * read as dormant.
+     *
+     * Was a flat 45 days, which is only right for a monthly plan. This book is
+     * mixed -- roughly 73% monthly, 16% two-monthly, 8% six-weekly -- so a fixed
+     * count flagged healthy two-monthly subscribers as dead. The window is now
+     * one cycle plus half a cycle of retry, per subscription.
      */
-    private const ON_HOLD_DORMANT_DAYS = 45;
+    private const ON_HOLD_DORMANT_CYCLES = 1.5;
+
+    /** Fallback cycle when a subscription carries no billing period. */
+    private const DEFAULT_CYCLE_DAYS = 30;
+
+    /**
+     * Columns {@see segmentPerformance()} may group by.
+     *
+     * Whitelisted because the name is interpolated into the SQL: a dimension
+     * arrives from the query string, and it cannot be a bound parameter.
+     */
+    public const SEGMENT_DIMENSIONS = [
+        'utm_source', 'utm_medium', 'utm_campaign', 'attribution_type',
+        'device_type', 'coupon_code', 'billing_period', 'primary_product',
+    ];
 
     /**
      * Tenure buckets for {@see tenureAtChurn()}, as [label, inclusive upper
@@ -144,7 +161,13 @@ class MetricsService
             $statusBreakdown[$s] = $orderStats->status($s);
         }
 
-        $notCompletedStandard = $orderStats->total() - $completed;
+        // Only statuses this app models. Deriving it as "everything minus
+        // completed" is what swept deleted orders in, and would do the same for
+        // any status a plugin invents tomorrow.
+        $notCompletedStandard = array_sum(array_map(
+            fn (string $st) => $orderStats->status($st),
+            array_diff(Record::ORDER_STATUSES, ['completed']),
+        ));
         $notCompletedStrict = array_sum(array_map(
             fn (string $st) => $orderStats->status($st),
             self::STRICT_NOT_COMPLETED,
@@ -154,6 +177,11 @@ class MetricsService
         $totalRevenue = $orderStats->revenue();
         $subscriptionRevenue = $orderStats->revenue(self::SUBSCRIPTION_PURCHASE_RELS);
         $oneTimeRevenue = $orderStats->revenue(['one_time']);
+
+        // total_amount is GROSS. VAT and shipping are roughly a quarter of it,
+        // and refunded money is still sitting inside it, so the figure the
+        // business actually keeps is a separate query.
+        $money = $this->revenueBreakdown($startS, $endS);
 
         // ---- Retention / churn ----
         $statusBreakdownSub = [];
@@ -173,6 +201,7 @@ class MetricsService
         // checkout, not a lost customer: nothing was ever earned to lose. They
         // are reported separately and netted out of the adjusted rate below.
         $failedSignups = $this->failedSignupsBetween($startS, $endS);
+        $recurring = $this->recurringRevenue($endS);
         $realChurn = max(0, $churnedInPeriod - $failedSignups);
         $revenue = $this->revenueRetention($startS, $endS);
 
@@ -189,6 +218,7 @@ class MetricsService
         $uniqueCustomers = $byCustomer->count();
         $repeatCustomers = $byCustomer->where('orders', '>=', 2)->count();
         $newCustomers = $this->newCustomerCount($startS, $endS);
+        $customerChurn = $this->customerChurn($startS, $endS);
 
         return [
             // ----- Subscriptions -----
@@ -217,6 +247,16 @@ class MetricsService
 
             // ----- Supporting totals -----
             'total_revenue' => round($totalRevenue, 2),
+            'gross_revenue' => round($totalRevenue, 2),
+            'net_revenue' => $money['net'],
+            'tax_collected' => $money['tax'],
+            'shipping_collected' => $money['shipping'],
+            'refunded' => $money['refunded'],
+            // What the business keeps: net of VAT, shipping and refunds.
+            'net_revenue_after_refunds' => $money['net_after_refunds'],
+            'net_revenue_known' => $money['known'],
+            'gross_margin_pct' => $this->grossMarginPct(),
+            'contribution' => $this->contributionFrom($money['net_after_refunds']),
             'average_order_value' => $completed > 0 ? round($totalRevenue / $completed, 2) : 0.0,
             'subscription_revenue' => round($subscriptionRevenue, 2),
             'one_time_revenue' => round($oneTimeRevenue, 2),
@@ -242,6 +282,9 @@ class MetricsService
                 ? round($realChurn / $activeAtStart * 100, 1)
                 : null,
             'on_hold_dormant' => $this->dormantOnHold($endS),
+            'mrr' => $recurring['mrr'],
+            'arr' => $recurring['arr'],
+            'arpu' => $recurring['arpu'],
             'net_revenue_retention' => $revenue['nrr'],
             'gross_revenue_retention' => $revenue['grr'],
             'recurring_revenue_start' => $revenue['start'],
@@ -255,6 +298,16 @@ class MetricsService
 
             // ----- Customers -----
             'unique_customers' => $uniqueCustomers,
+            // Deduplicated on billing email. `customer_id` and email disagree:
+            // guests share id 0, and one person can hold several ids.
+            'unique_customers_deduped' => $this->uniqueCustomersDeduped($startS, $endS),
+            'customers_active_at_start' => $customerChurn['active_start'],
+            'customers_churned' => $customerChurn['churned'],
+            // A customer has churned only when EVERY subscription they hold has
+            // ended. 27% of cancellations belong to people who still have a live
+            // one, so the subscription-level rate overstates customer loss.
+            'customer_churn_rate' => $customerChurn['rate'],
+            'unrecognised_statuses' => $this->unrecognisedStatuses($startS, $endS),
             'new_customers' => $newCustomers,
             'returning_customers' => max(0, $uniqueCustomers - $newCustomers),
             'repeat_rate' => $uniqueCustomers > 0 ? round($repeatCustomers / $uniqueCustomers * 100, 1) : null,
@@ -501,6 +554,580 @@ class MetricsService
         }
 
         return $sub['terminal'] && $sub['ended'] !== null && $sub['ended'] >= $instant;
+    }
+
+    /**
+     * Month-by-month net churn and revenue retention.
+     *
+     * Both are computed metrics -- {@see trend()} can only bucket raw counts and
+     * sums, so neither can be expressed there. Running {@see compute()} twelve
+     * times would answer it at roughly 27 queries a month; instead the whole
+     * subscription book and its completed orders are read once and every month
+     * is walked in memory.
+     *
+     * @param  int  $months  trailing months to return (1-60)
+     * @return array{rows: array<int, array{month:string, churn_net:?float, nrr:?float}>}
+     */
+    public function retentionSeries(int $months = self::CHURN_SERIES_MONTHS): array
+    {
+        $months = max(1, min(60, $months));
+
+        $subs = $this->subscriptionLifecycle()
+            ->whereNotNull('s.date_created_gmt')
+            ->selectRaw('s.id, s.status, s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended')
+            ->get()
+            ->map(fn ($r) => [
+                'id' => (int) $r->id,
+                'created' => (string) $r->created,
+                'ended' => $r->ended === null ? null : (string) $r->ended,
+                'terminal' => in_array((string) $r->status, self::TERMINAL, true),
+                'active' => (string) $r->status === 'active',
+            ])
+            ->all();
+
+        if ($subs === []) {
+            return ['rows' => []];
+        }
+
+        // subscription id => [[date, amount], ...] oldest first.
+        $payments = [];
+        foreach (DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('status', 'completed')
+            ->whereNotNull('subscription_id')
+            ->whereNotNull('date_created_gmt')
+            ->orderBy('date_created_gmt')
+            ->select('subscription_id', 'date_created_gmt', 'total_amount')
+            ->get() as $o) {
+            $payments[(int) $o->subscription_id][] = [(string) $o->date_created_gmt, (float) $o->total_amount];
+        }
+
+        $latest = (string) DB::table('records')->max('date_created_gmt');
+        $lastMonth = CarbonImmutable::parse($latest !== '' ? $latest : 'now')->startOfMonth();
+        $firstMonth = $lastMonth->subMonths($months - 1);
+
+        $rows = [];
+
+        for ($cursor = $firstMonth; $cursor <= $lastMonth; $cursor = $cursor->addMonth()) {
+            $startS = $cursor->toDateTimeString();
+            $endS = $cursor->addMonth()->toDateTimeString();
+
+            $activeStart = 0;
+            $churned = 0;
+            $failed = 0;
+            $base = 0.0;
+            $retained = 0.0;
+
+            foreach ($subs as $sub) {
+                $open = $this->wasActiveAt($sub, $startS);
+
+                if ($open) {
+                    $activeStart++;
+                }
+
+                $leftNow = $sub['terminal'] && $sub['ended'] !== null
+                    && $sub['ended'] >= $startS && $sub['ended'] < $endS;
+
+                if ($leftNow) {
+                    $churned++;
+
+                    if (! isset($payments[$sub['id']])) {
+                        $failed++; // never billed: a checkout defect, not churn
+                    }
+                }
+
+                if (! $open) {
+                    continue;
+                }
+
+                $was = $this->paymentBefore($payments[$sub['id']] ?? [], $startS);
+
+                if ($was <= 0.0) {
+                    continue;
+                }
+
+                // Live subscriptions have no meaningful end date, so only a
+                // terminal one can have stopped before the window closed.
+                $stillRunning = ! $sub['terminal'] || $sub['ended'] === null || $sub['ended'] >= $endS;
+
+                $base += $was;
+                $retained += $stillRunning ? $this->paymentBefore($payments[$sub['id']] ?? [], $endS) : 0.0;
+            }
+
+            $real = max(0, $churned - $failed);
+
+            $rows[] = [
+                'month' => $cursor->format('Y-m'),
+                'churn_net' => $activeStart > 0 ? round($real / $activeStart * 100, 1) : null,
+                'nrr' => $base > 0 ? round($retained / $base * 100, 1) : null,
+            ];
+        }
+
+        return ['rows' => $rows];
+    }
+
+    /**
+     * The amount of the last payment strictly before $instant.
+     *
+     * @param  array<int, array{0:string, 1:float}>  $payments  oldest first
+     */
+    private function paymentBefore(array $payments, string $instant): float
+    {
+        $amount = 0.0;
+
+        foreach ($payments as [$date, $value]) {
+            if ($date >= $instant) {
+                break;
+            }
+
+            $amount = $value;
+        }
+
+        return $amount;
+    }
+
+    /**
+     * How subscriptions acquired through each segment actually performed.
+     *
+     * The churn rate says the book is leaking; this says which taps it came out
+     * of. `$dimension` is any column travelling on the subscription row --
+     * `utm_source`, `utm_medium`, `device_type`, `coupon_code`, `billing_period`
+     * -- so one method answers channel, device and pricing questions alike.
+     *
+     * Reaching a SECOND payment is the headline: for a subscription business it
+     * predicts lifetime value better than anything else available this early,
+     * and roughly half of all payers here never get there.
+     *
+     * @param  string  $dimension  a whitelisted column on the subscription row
+     * @param  int  $min  drop segments smaller than this; they are noise
+     * @return array{dimension:string, rows:array<int, array<string, mixed>>}
+     */
+    public function segmentPerformance(string $dimension = 'utm_source', int $min = 5): array
+    {
+        if (! in_array($dimension, self::SEGMENT_DIMENSIONS, true)) {
+            $dimension = 'utm_source';
+        }
+
+        // Payments per subscription: the parent order plus every completed
+        // renewal. Counting renewals alone would report every one-payment
+        // subscriber as having never paid at all.
+        $paid = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('status', 'completed')
+            ->whereNotNull('subscription_id')
+            ->selectRaw('subscription_id, COUNT(*) as payments, SUM(total_amount) as revenue')
+            ->groupBy('subscription_id');
+
+        $rows = DB::table('records as s')
+            ->leftJoinSub($paid, 'p', 'p.subscription_id', '=', 's.id')
+            ->where('s.record_type', 'shop_subscription')
+            ->selectRaw("COALESCE(NULLIF(s.{$dimension}, ''), '(unattributed)') as segment")
+            ->selectRaw('COUNT(*) as subs')
+            ->selectRaw('SUM(CASE WHEN COALESCE(p.payments, 0) = 0 THEN 1 ELSE 0 END) as never_paid')
+            ->selectRaw('SUM(CASE WHEN COALESCE(p.payments, 0) >= 2 THEN 1 ELSE 0 END) as repeat_payers')
+            ->selectRaw("SUM(CASE WHEN s.status = 'active' THEN 1 ELSE 0 END) as still_active")
+            ->selectRaw('SUM(COALESCE(p.revenue, 0)) as revenue')
+            ->groupBy('segment')
+            ->havingRaw('COUNT(*) >= ?', [max(1, $min)])
+            ->orderByDesc('subs')
+            ->get();
+
+        $out = [];
+
+        foreach ($rows as $r) {
+            $subs = (int) $r->subs;
+            $revenue = (float) $r->revenue;
+
+            $repeatPct = round((int) $r->repeat_payers / $subs * 100, 1);
+            $margin = $this->marginOfError((int) $r->repeat_payers, $subs);
+            $ltv = round($revenue / $subs, 2);
+
+            $out[] = [
+                'segment' => (string) $r->segment,
+                'subs' => $subs,
+                'never_paid' => (int) $r->never_paid,
+                'never_paid_pct' => round((int) $r->never_paid / $subs * 100, 1),
+                'repeat_pct' => $repeatPct,
+                // A rate without its sample size invites acting on noise: at
+                // n = 13 a 69% repeat rate spans roughly 44%-94%.
+                'repeat_margin' => $margin,
+                'repeat_low' => round(max(0, $repeatPct - $margin), 1),
+                'repeat_high' => round(min(100, $repeatPct + $margin), 1),
+                'reliable' => $subs >= (int) config('metrics.segment_min_reliable_n', 30),
+                'still_active' => (int) $r->still_active,
+                'revenue' => round($revenue, 2),
+                'ltv' => $ltv,
+                // Null until a gross margin is configured — LTV is a revenue
+                // number, not a profit one, and guessing the difference is worse
+                // than reporting that nobody has supplied it.
+                'contribution' => $this->contributionFrom($ltv),
+                'payback_ratio' => $this->paybackRatio($ltv),
+            ];
+        }
+
+        return ['dimension' => $dimension, 'rows' => $out];
+    }
+
+    /**
+     * 95% margin of error on a proportion, in percentage points.
+     *
+     * The normal approximation is good enough for the job it does here, which
+     * is to stop a six-subscription segment being read as a finding.
+     */
+    private function marginOfError(int $hits, int $n): float
+    {
+        if ($n <= 0) {
+            return 0.0;
+        }
+
+        $p = $hits / $n;
+
+        // At p = 0 or p = 1 the normal approximation collapses to zero, which
+        // reads as certainty from a handful of rows — the exact false
+        // confidence this figure exists to prevent. Rule of three instead:
+        // the 95% upper bound on an event not yet seen in n trials is ~3/n.
+        if ($hits === 0 || $hits === $n) {
+            return round(min(100, 300 / $n), 1);
+        }
+
+        return round(1.96 * sqrt($p * (1 - $p) / $n) * 100, 1);
+    }
+
+    /**
+     * Lifetime contribution over acquisition cost.
+     *
+     * Above 1 the subscriber paid for itself; 3 is the usual health mark. Null
+     * unless both the margin and a CAC have been configured, because a payback
+     * number invented from one of them is worse than none.
+     */
+    private function paybackRatio(float $ltv): ?float
+    {
+        $cac = config('metrics.cac');
+        $contribution = $this->contributionFrom($ltv);
+
+        if ($cac === null || $contribution === null || (float) $cac <= 0) {
+            return null;
+        }
+
+        return round($contribution / (float) $cac, 2);
+    }
+
+    /**
+     * Campaign audiences, each one a list you could act on today.
+     *
+     *  cross_sell   customers on a single-flavour plan. The Combo is the best
+     *               seller and multi-subscription households are worth 2.3x a
+     *               single-subscription one, so this is the upgrade conversation.
+     *  win_back     customers whose every subscription has ended, who paid at
+     *               least `$minPayments` times. Proven habitual buyers, not
+     *               tyre-kickers, so a win-back has a better prior than cold
+     *               acquisition.
+     *  never_subscribed  one-time buyers who never took a subscription. They
+     *               have already bought and liked it; 15.8% convert unaided.
+     *  partial_churn  customers who cancelled one subscription but kept another.
+     *               Counted as churn today, still buying in reality — a
+     *               cross-sell list the dashboard currently hides among losses.
+     *
+     * @return array{audience:string, total:int, value:float, rows:array<int, array<string, mixed>>}
+     */
+    public function audience(string $audience, ?int $limit = 500): array
+    {
+        $rows = match ($audience) {
+            'win_back' => $this->winBackAudience(),
+            'never_subscribed' => $this->neverSubscribedAudience(),
+            'partial_churn' => $this->partialChurnAudience(),
+            default => $this->crossSellAudience(),
+        };
+
+        // Warmest first: what they have already spent is the best available
+        // proxy for how likely the next conversation is to land.
+        usort($rows, fn ($a, $z) => $z['value'] <=> $a['value']);
+
+        return [
+            'audience' => $audience,
+            'total' => count($rows),
+            'value' => round(array_sum(array_column($rows, 'value')), 2),
+            'rows' => $limit === null ? $rows : array_slice($rows, 0, $limit),
+        ];
+    }
+
+    /** Live single-flavour subscribers — the Combo upgrade conversation. */
+    private function crossSellAudience(): array
+    {
+        $spend = $this->completedSpendPerSubscription();
+
+        $rows = $this->subscriptions()
+            ->whereIn('status', ['active', 'on-hold'])
+            ->whereNotNull('billing_email')
+            ->select('id', 'billing_email', 'customer_id', 'billing_period', 'billing_interval', 'next_payment_at')
+            ->get();
+
+        // The product sits on the orders, not the subscription row.
+        $product = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->whereNotNull('subscription_id')
+            ->whereNotNull('primary_product')
+            ->selectRaw('subscription_id, MAX(primary_product) as product')
+            ->groupBy('subscription_id')
+            ->pluck('product', 'subscription_id')
+            ->all();
+
+        $out = [];
+
+        foreach ($rows as $r) {
+            $name = $product[(int) $r->id] ?? null;
+
+            // Already on a multi-flavour plan: nothing to upgrade them to.
+            if ($name === null || stripos($name, 'combo') !== false) {
+                continue;
+            }
+
+            $out[] = [
+                'customer' => $r->billing_email,
+                'subscription_id' => (int) $r->id,
+                'detail' => $name,
+                'cycle' => $this->cycleLabel($r->billing_period, $r->billing_interval),
+                'next_at' => $r->next_payment_at,
+                'payments' => (int) ($spend[(int) $r->id]['n'] ?? 0),
+                'value' => round((float) ($spend[(int) $r->id]['v'] ?? 0), 2),
+            ];
+        }
+
+        return $out;
+    }
+
+    /** Customers with nothing live left, who paid at least three times. */
+    private function winBackAudience(int $minPayments = 3): array
+    {
+        $spend = $this->completedSpendPerSubscription();
+        $live = array_flip($this->customerKeysWithLiveSubscription());
+        $out = [];
+
+        // Newest departure first, one row per customer: somebody who held three
+        // subscriptions and let them all lapse is one person to win back, not
+        // three.
+        $rows = $this->subscriptions()
+            ->whereIn('status', self::TERMINAL)
+            ->whereNotNull('billing_email')
+            ->select('id', 'billing_email', 'customer_id', 'ended_at')
+            ->orderByDesc('ended_at')
+            ->get();
+
+        $seen = [];
+
+        foreach ($rows as $r) {
+            $key = $this->customerKey($r->billing_email, (int) ($r->customer_id ?? 0));
+            $paid = (int) ($spend[(int) $r->id]['n'] ?? 0);
+
+            if ($key === null || isset($live[$key]) || isset($seen[$key]) || $paid < $minPayments) {
+                continue;
+            }
+
+            $seen[$key] = true;
+
+            $out[] = [
+                'customer' => $r->billing_email,
+                'subscription_id' => (int) $r->id,
+                'detail' => $paid.' payments before leaving',
+                'cycle' => null,
+                'next_at' => $r->ended_at,
+                'payments' => $paid,
+                'value' => round((float) ($spend[(int) $r->id]['v'] ?? 0), 2),
+            ];
+        }
+
+        return $out;
+    }
+
+    /** One-time buyers who have never held a subscription. */
+    private function neverSubscribedAudience(): array
+    {
+        $key = $this->customerKeyExpr();
+
+        $subscribers = $this->subscriptions()
+            ->whereNotNull('billing_email')
+            ->selectRaw("{$key} as ckey");
+
+        $rows = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('status', 'completed')
+            ->where('order_relationship', 'one_time')
+            ->whereNotIn('status', Record::EXCLUDED_ORDER_STATUSES)
+            ->whereNotNull('billing_email')
+            ->whereNotIn(DB::raw($key), $subscribers)
+            ->selectRaw("{$key} as ckey, MAX(billing_email) as email, COUNT(*) as orders, SUM(total_amount) as spend")
+            ->selectRaw('MAX(date_created_gmt) as last_order')
+            ->groupBy('ckey')
+            ->get();
+
+        return $rows->map(fn ($r) => [
+            'customer' => $r->email,
+            'subscription_id' => null,
+            'detail' => $r->orders.' one-time order'.($r->orders > 1 ? 's' : ''),
+            'cycle' => null,
+            'next_at' => $r->last_order,
+            'payments' => (int) $r->orders,
+            'value' => round((float) $r->spend, 2),
+        ])->all();
+    }
+
+    /** Cancelled one subscription, still holds another. Cross-sell, not save. */
+    private function partialChurnAudience(): array
+    {
+        $spend = $this->completedSpendPerSubscription();
+        $live = array_flip($this->customerKeysWithLiveSubscription());
+        $seen = [];
+        $out = [];
+
+        $rows = $this->subscriptions()
+            ->whereIn('status', self::TERMINAL)
+            ->whereNotNull('billing_email')
+            ->select('id', 'billing_email', 'customer_id', 'ended_at')
+            ->orderByDesc('ended_at')
+            ->get();
+
+        foreach ($rows as $r) {
+            $key = $this->customerKey($r->billing_email, (int) ($r->customer_id ?? 0));
+
+            if ($key === null || ! isset($live[$key]) || isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $out[] = [
+                'customer' => $r->billing_email,
+                'subscription_id' => (int) $r->id,
+                'detail' => 'cancelled #'.$r->id.', still subscribed',
+                'cycle' => null,
+                'next_at' => $r->ended_at,
+                'payments' => (int) ($spend[(int) $r->id]['n'] ?? 0),
+                'value' => round((float) ($spend[(int) $r->id]['v'] ?? 0), 2),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Completed order count and spend per subscription.
+     *
+     * @return array<int, array{n:int, v:float}>
+     */
+    private function completedSpendPerSubscription(): array
+    {
+        $out = [];
+
+        foreach (DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('status', 'completed')
+            ->whereNotNull('subscription_id')
+            ->selectRaw('subscription_id, COUNT(*) as n, SUM(total_amount) as v')
+            ->groupBy('subscription_id')
+            ->get() as $r) {
+            $out[(int) $r->subscription_id] = ['n' => (int) $r->n, 'v' => (float) $r->v];
+        }
+
+        return $out;
+    }
+
+    /** @return array<int, string> customer keys holding a non-terminal subscription */
+    private function customerKeysWithLiveSubscription(): array
+    {
+        $keys = [];
+
+        foreach ($this->subscriptions()
+            ->whereNotIn('status', self::TERMINAL)
+            ->select('billing_email', 'customer_id')
+            ->get() as $r) {
+            $key = $this->customerKey($r->billing_email, (int) ($r->customer_id ?? 0));
+
+            if ($key !== null) {
+                $keys[] = $key;
+            }
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    /** "every 6 weeks", "monthly" — a cycle a person can read. */
+    private function cycleLabel(?string $period, ?int $interval): ?string
+    {
+        if ($period === null) {
+            return null;
+        }
+
+        $n = max(1, (int) $interval);
+
+        if ($n === 1) {
+            return $period === 'month' ? 'monthly' : 'every '.$period;
+        }
+
+        return 'every '.$n.' '.$period.'s';
+    }
+
+    /**
+     * Live subscriptions whose next payment is due inside the window ahead.
+     *
+     * `next_payment_at` is scheduled by WooCommerce, so this is the actual
+     * renewal pipeline rather than an inference. Subscribers who have paid only
+     * once are flagged: half of all payers never reach a second payment, which
+     * makes that renewal the one worth intervening on.
+     *
+     * @param  int  $days  how far ahead to look
+     * @return array{total:int, at_first_renewal:int, value:float, rows:array<int, array<string, mixed>>}
+     */
+    public function upcomingRenewals(int $days = 14, ?int $limit = 200): array
+    {
+        $now = CarbonImmutable::parse((string) DB::table('records')->max('date_created_gmt'));
+
+        $paid = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('status', 'completed')
+            ->whereNotNull('subscription_id')
+            ->selectRaw('subscription_id, COUNT(*) as payments, MAX(total_amount) as amount')
+            ->groupBy('subscription_id');
+
+        $query = DB::table('records as s')
+            ->leftJoinSub($paid, 'p', 'p.subscription_id', '=', 's.id')
+            ->where('s.record_type', 'shop_subscription')
+            ->whereNotIn('s.status', self::TERMINAL)
+            ->whereNotNull('s.next_payment_at')
+            ->where('s.next_payment_at', '>=', $now->toDateTimeString())
+            ->where('s.next_payment_at', '<', $now->addDays(max(1, $days))->toDateTimeString())
+            ->selectRaw('s.id, s.billing_email, s.customer_id, s.status, s.next_payment_at')
+            ->selectRaw('s.utm_source, s.billing_period, s.billing_interval')
+            ->selectRaw('COALESCE(p.payments, 0) as payments, COALESCE(p.amount, 0) as amount')
+            ->orderBy('s.next_payment_at');
+
+        $all = $query->get();
+
+        $rows = [];
+        foreach ($all as $r) {
+            $payments = (int) $r->payments;
+
+            $rows[] = [
+                'id' => (int) $r->id,
+                'customer' => $r->billing_email ?: ($r->customer_id > 0 ? 'Customer #'.$r->customer_id : null),
+                'status' => (string) $r->status,
+                'due_at' => (string) $r->next_payment_at,
+                'days_away' => (int) max(0, floor($now->diffInDays(CarbonImmutable::parse((string) $r->next_payment_at)))),
+                'payments_so_far' => $payments,
+                'amount' => round((float) $r->amount, 2),
+                'source' => $r->utm_source,
+                'cycle_days' => $this->cycleDays($r->billing_period, $r->billing_interval === null ? null : (int) $r->billing_interval),
+                // The renewal that decides whether they become a real customer.
+                'first_renewal' => $payments === 1,
+            ];
+        }
+
+        $firsts = array_filter($rows, fn ($r) => $r['first_renewal']);
+
+        return [
+            'total' => count($rows),
+            'at_first_renewal' => count($firsts),
+            'value' => round(array_sum(array_column($rows, 'amount')), 2),
+            'rows' => $limit === null ? $rows : array_slice($rows, 0, $limit),
+        ];
     }
 
     /**
@@ -837,12 +1464,46 @@ class MetricsService
         return DB::table('records')->where('record_type', 'shop_subscription');
     }
 
+    /**
+     * Orders created inside the window, excluding anything that is not business
+     * data.
+     *
+     * `trash` is a deleted order. Because "not completed" was defined as
+     * `status != 'completed'`, 26 deleted orders worth GBP 3,099 were being
+     * reported as failed business. Exclusion happens here so no caller can
+     * forget it; {@see unrecognisedStatuses()} surfaces what was dropped.
+     */
     private function ordersInWindow(string $start, string $end): Builder
     {
         return DB::table('records')
             ->where('record_type', 'shop_order')
+            ->whereNotIn('status', Record::EXCLUDED_ORDER_STATUSES)
             ->where('date_created_gmt', '>=', $start)
             ->where('date_created_gmt', '<', $end);
+    }
+
+    /**
+     * Statuses in the window that this app does not model, with their counts.
+     *
+     * Surfaced rather than absorbed: a plugin can invent a status at any time,
+     * and silently folding it into "not completed" is how deleted orders became
+     * a retention problem.
+     *
+     * @return array<string, int>
+     */
+    private function unrecognisedStatuses(string $start, string $end): array
+    {
+        $known = array_merge(Record::ORDER_STATUSES, Record::EXCLUDED_ORDER_STATUSES);
+
+        return DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->whereNotIn('status', $known)
+            ->where('date_created_gmt', '>=', $start)
+            ->where('date_created_gmt', '<', $end)
+            ->selectRaw('status, COUNT(*) as n')
+            ->groupBy('status')
+            ->pluck('n', 'status')
+            ->all();
     }
 
     /**
@@ -967,7 +1628,7 @@ class MetricsService
      */
     private function dormantOnHold(string $end): int
     {
-        $cutoff = CarbonImmutable::parse($end)->subDays(self::ON_HOLD_DORMANT_DAYS)->toDateTimeString();
+        $at = CarbonImmutable::parse($end);
 
         $lastPaid = DB::table('records')
             ->where('record_type', 'shop_order')
@@ -977,17 +1638,214 @@ class MetricsService
             ->selectRaw('subscription_id, MAX(date_created_gmt) as last_paid_at')
             ->groupBy('subscription_id');
 
-        return DB::table('records as s')
+        $rows = DB::table('records as s')
             ->leftJoinSub($lastPaid, 'lp', 'lp.subscription_id', '=', 's.id')
             ->where('s.record_type', 'shop_subscription')
             ->where('s.status', 'on-hold')
             ->where('s.date_created_gmt', '<', $end)
-            // Never paid at all, or last paid before the cutoff.
-            ->where(function (Builder $q) use ($cutoff) {
-                $q->whereNull('lp.last_paid_at')
-                    ->orWhere('lp.last_paid_at', '<', $cutoff);
+            ->selectRaw('s.billing_period, s.billing_interval, s.date_created_gmt, lp.last_paid_at')
+            ->get();
+
+        $dormant = 0;
+
+        foreach ($rows as $row) {
+            // Never billed: measured from sign-up, since that is when the first
+            // payment was due.
+            $since = CarbonImmutable::parse((string) ($row->last_paid_at ?? $row->date_created_gmt));
+            $allowed = $this->cycleDays($row->billing_period, $row->billing_interval) * self::ON_HOLD_DORMANT_CYCLES;
+
+            if ($since->diffInDays($at) > $allowed) {
+                $dormant++;
+            }
+        }
+
+        return $dormant;
+    }
+
+    /** One billing cycle in days; the default when the row carries no cycle. */
+    private function cycleDays(?string $period, ?int $interval): int
+    {
+        $days = Record::PERIOD_DAYS[strtolower((string) $period)] ?? null;
+
+        if ($days === null) {
+            return self::DEFAULT_CYCLE_DAYS;
+        }
+
+        return $days * max(1, (int) $interval);
+    }
+
+    /**
+     * Gross, net, tax, shipping and refunds for completed orders in the window.
+     *
+     * `net_amount` only exists on files exported with 04-export-with-net-revenue
+     * or later, so `known` reports whether the split is real or absent. Callers
+     * must not silently present gross as net.
+     *
+     * @return array{net:?float, tax:?float, shipping:?float, refunded:float, net_after_refunds:?float, known:bool}
+     */
+    private function revenueBreakdown(string $start, string $end): array
+    {
+        $row = $this->ordersInWindow($start, $end)
+            ->where('status', 'completed')
+            ->selectRaw('SUM(net_amount) as net, SUM(tax_amount) as tax, SUM(shipping_amount) as shipping')
+            ->selectRaw('SUM(refunded_amount) as refunded, COUNT(net_amount) as with_net, COUNT(*) as n')
+            ->first();
+
+        $known = (int) ($row->with_net ?? 0) > 0;
+        $net = $known ? round((float) $row->net, 2) : null;
+        $refunded = round((float) ($row->refunded ?? 0), 2);
+
+        return [
+            'net' => $net,
+            'tax' => $known ? round((float) $row->tax, 2) : null,
+            'shipping' => $known ? round((float) $row->shipping, 2) : null,
+            'refunded' => $refunded,
+            'net_after_refunds' => $net === null ? null : round($net - $refunded, 2),
+            'known' => $known,
+        ];
+    }
+
+    /** Configured product gross margin, or null while nobody has supplied it. */
+    private function grossMarginPct(): ?float
+    {
+        $pct = config('metrics.gross_margin_pct');
+
+        return $pct === null ? null : (float) $pct;
+    }
+
+    /** Contribution after cost of goods; null until the margin is configured. */
+    private function contributionFrom(?float $net): ?float
+    {
+        $pct = $this->grossMarginPct();
+
+        return $net === null || $pct === null ? null : round($net * $pct / 100, 2);
+    }
+
+    /**
+     * Customers, deduplicated on billing email.
+     *
+     * `unique_customers` counts distinct `customer_id`, which every guest
+     * shares as 0 and which one person can hold several of. The email is the
+     * better key when it exists.
+     */
+    private function uniqueCustomersDeduped(string $start, string $end): int
+    {
+        $key = $this->customerKeyExpr();
+
+        return (int) $this->ordersInWindow($start, $end)
+            ->selectRaw("COUNT(DISTINCT {$key}) as n")
+            ->value('n');
+    }
+
+    /**
+     * Churn measured on customers rather than subscriptions.
+     *
+     * A customer counts as active while ANY of their subscriptions is active,
+     * and has churned only once every one has ended. On this data 172 of 639
+     * cancellations belong to people who still hold a live subscription — plan
+     * changes and consolidations that the subscription-level rate reports as
+     * losses.
+     *
+     * @return array{active_start:int, churned:int, rate:?float}
+     */
+    private function customerChurn(string $start, string $end): array
+    {
+        $atStart = $this->activeCustomerKeys($start);
+
+        if ($atStart === []) {
+            return ['active_start' => 0, 'churned' => 0, 'rate' => null];
+        }
+
+        $atEnd = array_flip($this->activeCustomerKeys($end));
+        $churned = 0;
+
+        foreach ($atStart as $key) {
+            if (! isset($atEnd[$key])) {
+                $churned++;
+            }
+        }
+
+        return [
+            'active_start' => count($atStart),
+            'churned' => $churned,
+            'rate' => round($churned / count($atStart) * 100, 1),
+        ];
+    }
+
+    /**
+     * Customer keys holding at least one subscription that was live at $instant.
+     *
+     * @return array<int, string>
+     */
+    private function activeCustomerKeys(string $instant): array
+    {
+        $key = $this->customerKeyExpr();
+
+        return $this->subscriptionLifecycle()
+            ->whereNotNull('s.date_created_gmt')
+            ->where('s.date_created_gmt', '<', $instant)
+            ->where(function (Builder $q) use ($instant) {
+                $q->where('s.status', 'active')
+                    ->orWhere(function (Builder $t) use ($instant) {
+                        $t->whereIn('s.status', self::TERMINAL)
+                            ->whereRaw($this->effectiveEndExpr().' >= ?', [$instant]);
+                    });
             })
-            ->count();
+            ->selectRaw(str_replace('billing_email', 's.billing_email', str_replace('customer_id', 's.customer_id', $key)).' as ckey')
+            ->distinct()
+            ->pluck('ckey')
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Monthly recurring revenue as of $end.
+     *
+     * Each live subscription is priced at its most recent completed payment and
+     * normalised to 30 days by its own billing cycle -- a two-monthly plan at
+     * GBP 40 is GBP 20 of MRR, not GBP 40. The cycle matters: this book is only
+     * about 73% monthly.
+     *
+     * Gross, like every other money figure here: it includes VAT and shipping,
+     * because that is what `total_amount` carries.
+     *
+     * @return array{mrr:float, arr:float, arpu:?float}
+     */
+    private function recurringRevenue(string $end): array
+    {
+        $subs = DB::table('records')
+            ->where('record_type', 'shop_subscription')
+            ->where('status', 'active')
+            ->where('date_created_gmt', '<', $end)
+            ->select('id', 'billing_period', 'billing_interval')
+            ->get();
+
+        if ($subs->isEmpty()) {
+            return ['mrr' => 0.0, 'arr' => 0.0, 'arpu' => null];
+        }
+
+        $price = $this->lastPaymentBefore($subs->pluck('id')->all(), $end);
+
+        $mrr = 0.0;
+        $paying = 0;
+
+        foreach ($subs as $sub) {
+            $amount = (float) ($price[(int) $sub->id] ?? 0.0);
+
+            if ($amount <= 0.0) {
+                continue; // never billed, so nothing recurring yet
+            }
+
+            $paying++;
+            $mrr += $amount * (30 / $this->cycleDays($sub->billing_period, $sub->billing_interval === null ? null : (int) $sub->billing_interval));
+        }
+
+        return [
+            'mrr' => round($mrr, 2),
+            'arr' => round($mrr * 12, 2),
+            'arpu' => $paying > 0 ? round($mrr / $paying, 2) : null,
+        ];
     }
 
     /**

@@ -1,6 +1,7 @@
 @extends('layouts.app')
 
 @section('title', 'Upload CSV — Hurayra Analytics')
+@section('heading', 'Upload CSV')
 
 @section('content')
 <div class="grid gap-8 lg:grid-cols-5">
@@ -50,7 +51,20 @@
         <div class="mt-6 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm">
             <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500">Required columns</h2>
             <code class="mt-2 block wrap-break-word text-xs leading-relaxed text-slate-600">{{ implode(', ', $expectedColumns) }}</code>
-            <p class="mt-2 text-xs text-slate-400">Extra columns (e.g. customer_id, parent_order_id) are allowed and ignored.</p>
+            <p class="mt-2 text-xs text-slate-400">
+                Unrecognised columns are ignored, but several optional ones are <em>read</em> when present:
+                <span class="font-mono text-slate-500">ended_at</span>,
+                <span class="font-mono text-slate-500">utm_source</span>,
+                <span class="font-mono text-slate-500">utm_medium</span>,
+                <span class="font-mono text-slate-500">utm_campaign</span>,
+                <span class="font-mono text-slate-500">device_type</span>,
+                <span class="font-mono text-slate-500">billing_period</span>,
+                <span class="font-mono text-slate-500">billing_interval</span>,
+                <span class="font-mono text-slate-500">next_payment_at</span>,
+                <span class="font-mono text-slate-500">coupon_code</span>,
+                <span class="font-mono text-slate-500">primary_product</span>.
+                Use <span class="font-mono text-slate-500">03-export-with-attribution.sql</span> to include them.
+            </p>
         </div>
     </div>
 

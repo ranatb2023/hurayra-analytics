@@ -56,6 +56,22 @@ class CsvImportService
         'date_updated_gmt',
     ];
 
+    /**
+     * Optional marketing columns, mapped straight through when present.
+     *
+     * Every one is optional: a file exported before these existed still imports
+     * unchanged, the columns simply stay null. csv column => records column.
+     */
+    public const ATTRIBUTION_COLUMNS = [
+        'attribution_type' => 'attribution_type',
+        'utm_source' => 'utm_source',
+        'utm_medium' => 'utm_medium',
+        'utm_campaign' => 'utm_campaign',
+        'device_type' => 'device_type',
+        'coupon_code' => 'coupon_code',
+        'primary_product' => 'primary_product',
+    ];
+
     private const CHUNK_SIZE = 500;
 
     /** How many bad rows to keep as examples in the import's error_log. */
@@ -210,9 +226,81 @@ class CsvImportService
             'customer_id' => $this->intOrNull($get('customer_id')), // optional extra column
             'order_relationship' => $this->normaliseRelationship($get('order_relationship')),
             'billing_email' => $this->normaliseEmail($get('billing_email')),
+            'discount_amount' => $this->numericOrZero($get('discount_amount')),
+            // Null, not zero: a file without these columns means "gross only",
+            // which is a different claim from "this order earned nothing net".
+            'net_amount' => $this->decimalOrNull($index, $get, 'net_amount'),
+            'tax_amount' => $this->decimalOrNull($index, $get, 'tax_amount'),
+            'shipping_amount' => $this->decimalOrNull($index, $get, 'shipping_amount'),
+            'refunded_amount' => $this->numericOrZero($get('refunded_amount')),
+            // Subscription-only: a billing cycle on an order means nothing, and
+            // a next-payment date on a dead subscription is stale scheduling.
+            'billing_period' => $recordType === 'shop_subscription'
+                ? $this->normaliseBillingPeriod($get('billing_period'))
+                : null,
+            'billing_interval' => $recordType === 'shop_subscription'
+                ? $this->positiveIntOrNull($get('billing_interval'))
+                : null,
+            'next_payment_at' => $recordType === 'shop_subscription'
+                && ! in_array($status, Record::TERMINAL_SUBSCRIPTION_STATUSES, true)
+                ? $this->parseDate($get('next_payment_at'))
+                : null,
             'created_at' => $now,
             'updated_at' => $now,
-        ];
+        ] + $this->attributionFrom($index, $get);
+    }
+
+    /**
+     * The optional marketing columns, blank-normalised.
+     *
+     * WooCommerce writes the literal string `(direct)` for unattributed
+     * traffic; it is kept verbatim rather than nulled, because "we know it was
+     * direct" and "we have no attribution" are different facts.
+     *
+     * @param  callable(string): mixed  $get
+     * @return array<string, ?string>
+     */
+    private function attributionFrom(array $index, callable $get): array
+    {
+        $out = [];
+
+        foreach (self::ATTRIBUTION_COLUMNS as $csv => $column) {
+            $value = isset($index[$csv]) ? trim((string) $get($csv)) : '';
+            $out[$column] = $value === '' ? null : mb_substr($value, 0, 191);
+        }
+
+        return $out;
+    }
+
+    /**
+     * A money column that may legitimately be absent.
+     *
+     * @param  callable(string): mixed  $get
+     */
+    private function decimalOrNull(array $index, callable $get, string $column): ?float
+    {
+        if (! isset($index[$column])) {
+            return null;
+        }
+
+        $raw = trim((string) $get($column));
+
+        return $raw === '' ? null : $this->numericOrZero($raw);
+    }
+
+    /** WooCommerce billing periods; anything else is not a cycle we can use. */
+    private function normaliseBillingPeriod(mixed $value): ?string
+    {
+        $period = strtolower(trim((string) $value));
+
+        return in_array($period, ['day', 'week', 'month', 'year'], true) ? $period : null;
+    }
+
+    private function positiveIntOrNull(mixed $value): ?int
+    {
+        $n = $this->intOrNull($value);
+
+        return $n !== null && $n > 0 ? $n : null;
     }
 
     /**
@@ -252,15 +340,15 @@ class CsvImportService
 
     private function flush(array $buffer): void
     {
-        DB::table('records')->upsert(
-            $buffer,
-            ['id'],
-            [
-                'import_id', 'record_type', 'status', 'date_created_gmt', 'ended_at',
-                'total_amount', 'subscription_id', 'customer_id', 'order_relationship',
-                'billing_email', 'updated_at',
-            ],
-        );
+        // Derived from the payload rather than listed by hand: a hardcoded list
+        // silently stops updating any column added later, so a re-import would
+        // leave the new fields stale on every row that already existed.
+        $update = array_values(array_diff(
+            array_keys($buffer[0]),
+            ['id', 'created_at'], // conflict key, and the original insert time
+        ));
+
+        DB::table('records')->upsert($buffer, ['id'], $update);
     }
 
     /** Strip the wc- prefix, lowercase, trim. Empty stays empty string. */

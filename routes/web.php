@@ -14,6 +14,11 @@ Route::get('/api/metrics/trend', [MetricsController::class, 'trend'])->name('met
 Route::get('/api/metrics/sparklines', [MetricsController::class, 'sparklines'])->name('metrics.sparklines');
 Route::get('/api/metrics/top-customers', [MetricsController::class, 'topCustomers'])->name('metrics.top_customers');
 Route::get('/api/metrics/cohorts', [MetricsController::class, 'cohorts'])->name('metrics.cohorts');
+Route::get('/api/metrics/audience', [MetricsController::class, 'audience'])->name('metrics.audience');
+Route::get('/api/metrics/audience/export', [MetricsController::class, 'audienceExport'])->name('metrics.audience.export');
+Route::get('/api/metrics/segments', [MetricsController::class, 'segments'])->name('metrics.segments');
+Route::get('/api/metrics/renewals', [MetricsController::class, 'upcomingRenewals'])->name('metrics.renewals');
+Route::get('/api/metrics/renewals/export', [MetricsController::class, 'upcomingRenewalsExport'])->name('metrics.renewals.export');
 Route::get('/api/metrics/cohort-value', [MetricsController::class, 'cohortValue'])->name('metrics.cohort_value');
 Route::get('/api/metrics/churn', [MetricsController::class, 'churn'])->name('metrics.churn');
 Route::get('/api/metrics/churned-subscriptions', [MetricsController::class, 'churnedSubscriptions'])->name('metrics.churned_subscriptions');

@@ -60,6 +60,26 @@ id, record_type, status, date_created_gmt, total_amount, subscription_id, order_
 | `order_relationship` | `subscription` \| `parent` \| `renewal` \| `one_time`. Separates subscription orders from one-time orders. |
 | `billing_email` | Trimmed + lowercased on import. |
 
+#### Optional: marketing attribution and billing cycle
+
+`03-export-with-attribution.sql` supersedes `02-export.sql`. Same rows and same
+first ten columns, so it stays importable; every extra column is optional and a
+file exported before they existed still imports unchanged.
+
+| Column | Source | Why |
+| --- | --- | --- |
+| `attribution_type`, `utm_source`, `utm_medium`, `utm_campaign`, `device_type` | WooCommerce Order Attribution (core since Woo 8.5) | Ties retention to the spend that bought it. `source_type = typein` means direct — treating that as a channel win is how direct ends up credited with everything. |
+| `billing_period`, `billing_interval` | `_billing_period` / `_billing_interval` | The real renewal length. **Not uniformly monthly** — about 73% monthly, 16% two-monthly, 8% six-weekly. Any "overdue" rule on a fixed day count is wrong for a quarter of the book. |
+| `next_payment_at` | `_schedule_next_payment` | The scheduled renewal. Makes {@see MetricsService::upcomingRenewals()} a dated list rather than an inference. |
+| `coupon_code`, `discount_amount` | `wp_wc_order_coupon_lookup` | Whether discounted acquisitions retain worse. |
+| `primary_product` | `wp_wc_order_product_lookup` | Highest-revenue line on the order, so retention splits by product without a second export. |
+
+Derived from these:
+
+- **Segment performance** (`GET /api/metrics/segments?dimension=utm_source`) — subscriptions, never-paid %, reached-second-payment %, still active, revenue and LTV per segment. `dimension` is whitelisted against `MetricsService::SEGMENT_DIMENSIONS` because the column name is interpolated into the SQL and cannot be a bound parameter.
+- **Renewal pipeline** (`GET /api/metrics/renewals?days=14`, plus `/export`) — live subscriptions renewing in the window, flagging those at their **first** renewal: roughly half of all payers never reach a second payment, so that is the one worth intervening on.
+- **Dormant on-hold** is now measured in **billing cycles** (`ON_HOLD_DORMANT_CYCLES = 1.5`), not a fixed 45 days.
+
 #### Optional: the subscription end date
 
 `status` is a **live** value — every import overwrites it, and it carries no
@@ -188,9 +208,125 @@ All order metrics are **cohort** (events in the window).
 - **Failed sign-ups** (`failed_signups`) — leavers that ended having never completed an order. A checkout defect, not churn: nothing was earned to lose. Netted out of `churned_net_of_failed` / `monthly_churn_rate_net`, which sit beside the gross rate rather than replacing it, so a published figure never silently changes meaning.
 - **Dormant on-hold** (`on_hold_dormant`) — `on-hold` subscriptions with no **completed** order in 45 days (`ON_HOLD_DORMANT_DAYS`). Failed retries do not count. These have stopped paying but can never become churn, since churn only counts terminal statuses — so the churn rate is a floor while this is non-zero.
 - **Net / gross revenue retention** (`net_revenue_retention`, `gross_revenue_retention`) — of the recurring revenue on the books when the period opened, how much was still billing when it closed. Each subscriber is priced at its most recent completed order before the instant in question. NRR lets upgrades push it above 100%; GRR caps each subscriber at its starting price so it only measures loss. New sign-ups are excluded from both by design: this asks whether the existing book held, not whether acquisition replaced it.
+- **Retention series** (`retentionSeries()`, surfaced through `GET /api/metrics/sparklines`) — net churn and NRR per month for the hero sparklines. Both are computed metrics, so `trend()` cannot bucket them; rather than run `compute()` once a month (~27 queries each), the whole subscription book and its completed orders are read once (3 queries) and every month is walked in memory. A test asserts the series and `compute()` agree month by month, so a sparkline can never tell a different story from the card above it.
 - **Cohort value** (`GET /api/metrics/cohort-value?cohorts=12`) — lifetime completed spend per sign-up month: cohort size, still-active count, retention %, median tenure, total earned and value per subscriber. Read against acquisition cost, this is what decides whether the churn rate is survivable. Cohorts from the last three months are flagged `immature` — still accruing revenue.
 - **Subscription status mix** — point-in-time donut across all six subscription statuses.
 - **Subscriber history** (`GET /api/metrics/churn?months=12`) — a row per calendar month with *active at start*, *new*, *churned*, *active at end* and the churn rate. Every figure comes from sign-up and end dates, so a closed month's row never changes; a cancellation in June moves June's row and nothing before it. Also appended to the metrics CSV export.
+
+### Dashboard shell
+
+A fixed dark rail on the left, a top bar carrying the period filter, and five
+views. The rail switches `view` in Alpine rather than navigating, so fetched data
+survives moving between views.
+
+| View | Holds |
+| --- | --- |
+| **Overview** | MRR, NRR, Churn·Real, Revenue; trend chart; subscription mix; renewals due; top channels. Sized to fit one screen. |
+| **Subscribers** | Subscription cards, live-state chips, sign-up cohort, the subscribers-lost drill-down |
+| **Retention** | Churn rates, revenue retention, tenure at churn, month-by-month subscriber history |
+| **Acquisition** | Segment performance and the renewal pipeline |
+| **Customers** | Customer cards, top customers, one-time → subscription conversion |
+| **Cohorts** | Cohort value and cohort retention — the same intake seen as value earned and as share retained |
+| **Revenue** | Orders, not-completed breakdown, supporting totals, revenue-split and status-mix donuts |
+| **Email** | Klaviyo campaign and flow performance — the only section fed by a live API rather than the CSV |
+
+The rail lives in `dashboard/partials/rail` and the **layout** renders it, so it
+appears on every page. On the dashboard the entries are buttons that flip
+Alpine's `view`; anywhere else they are links back to `?view=…`, which the
+dashboard reads on boot. Defining the nav inside one view left the rail empty on
+the upload page.
+
+**Subscription mix** is not a doughnut of all six statuses. `cancelled` is a
+cumulative lifetime count and was 74% of that chart, which meant the ring only
+ever got pinker and buried the number that matters — how many subscribers are
+live now. `partials/status-mix` makes the live book the subject (a segmented bar
+of `active` / `on-hold` / `pending-cancel` / `pending`) and reports everything
+ended underneath as context.
+
+Charts inside a view that is hidden at first paint render at **zero size**.
+`renderChartsFor(view)`, fired by a watcher on `view`, redraws them on the way
+in; without it the Revenue view's donuts came up blank and clipped.
+
+The remaining doughnut has **no tooltip**. The hole is the label: hovering a slice
+names it in the centre, in the slice's own colour, with its share. A floating
+tooltip on a doughnut covers the neighbouring slices you are comparing against,
+and the space in the middle is already the right size. `donutOptions(key)` wires
+this up; a `@mouseleave` on the wrapper clears it, since Chart.js reports no
+hover once the pointer leaves the canvas.
+
+Three things that will bite if you edit the shell:
+
+- The Alpine root lives on the layout's outer `<div>` via `@yield('app_data')`,
+  **not** inside `@section('content')` — the rail and top bar have to share the
+  views' scope. Use the block form `@section('app_data') … @endsection`; the
+  inline `@section(name, value)` form compiles its second argument as a PHP
+  string, so `{{ }}` echoes inside it never run.
+- Filter `<option>`s are rendered server-side. With `x-for`-generated options,
+  `x-model` applies its value before the options exist and the select snaps to
+  the first entry.
+
+### Dashboard hierarchy
+
+Cards are not all equal, and the difference is data, not markup. Every metric is
+declared once in the table at the top of `dashboard/index.blade.php`:
+
+| Field | Meaning |
+| --- | --- |
+| `tier` | `1` renders a **card** (`partials/card`) — a number you would act on. `2` renders a **chip** (`partials/stat-chip`) — quieter supporting detail, half the height, dimmed when the value is zero. |
+| `dir` | `good` (up is better), `bad` (up is worse), `flat` (neither). Drives the semantic icon tint **and** the comparison badge, so a rising churn rate goes red rather than green. |
+| `note` | Alpine expression for the caption under the value. |
+| `help` | Hover text. Explanations belong on the number they explain, not in a paragraph competing with it. |
+
+The `$directions` map is derived from the same table and handed to Alpine, so the
+badge colours can never drift from the definitions. Sections carry an `id` that
+registers them with the sticky nav's scroll tracker. The hero shows three metrics
+that appear **nowhere else** on the page — repeating section cards there spends
+the best space on the page saying nothing new.
+
+### Gross, net, and what the business keeps
+
+`total_amount` is **gross**: it carries VAT and shipping, together about 24% of
+it here, and refunded money is still inside it. Export with
+`04-export-with-net-revenue.sql` and the split arrives per order:
+
+```
+gross                    £4,802.70
+  less VAT                 £800.48   ← HMRC's, never revenue
+  less shipping            £218.75   ← pass-through
+  less refunds              £72.90   ← its own record type, invisible to an order query
+= net kept               £3,710.57
+```
+
+`net_revenue_known` says whether the split is real. Without those columns the net
+figures report **null**, never gross-relabelled-as-net.
+
+Contribution needs a margin nobody can derive from a WooCommerce export. Set
+`METRICS_GROSS_MARGIN_PCT` (and `METRICS_CAC` for payback) in `config/metrics.php`;
+until then both report as unset rather than assuming a number.
+
+### Counting rules that were quietly wrong
+
+- **Order statuses are whitelisted.** "Not completed" was `status != 'completed'`,
+  which swept 26 deleted (`trash`) orders worth £3,099 into a retention metric.
+  Unrecognised statuses are now excluded *and* surfaced in `unrecognised_statuses`
+  rather than absorbed.
+- **Churn is reported on customers as well as subscriptions.** A customer has
+  churned only when *every* subscription they hold has ended. 172 of 639
+  cancellations belong to people who still have a live one, so the
+  subscription-level rate roughly doubles the customer-level one (16.6% vs 7.9%).
+- **Customers are deduplicated on billing email.** `customer_id` is 0 for every
+  guest and one person can hold several.
+- **Segment rates carry a 95% interval and a sample size.** At n = 13 a 69%
+  repeat rate spans 44–94%. At p = 0 the normal approximation returns zero, which
+  reads as certainty, so the rule of three (3/n) is used at the extremes.
+
+### Campaign lists
+
+`GET /api/metrics/audience?audience=…` (plus `/export`) serves four lists, each
+sorted by lifetime spend: `cross_sell` (single-flavour subscribers, the Combo
+upgrade), `win_back` (every subscription ended, 3+ payments), `never_subscribed`
+(one-time buyers who never signed up), `partial_churn` (cancelled one plan, kept
+another — counted as churn, still buying).
 
 ### Reconciling a subscriber count
 

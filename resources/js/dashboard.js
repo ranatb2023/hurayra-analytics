@@ -18,6 +18,15 @@ export default (config = {}) => ({
     trendType: 'line',
     openDropdown: null, // id of the currently open custom dropdown
 
+    // Which view is on screen. The rail switches this rather than navigating,
+    // so fetched data survives moving between views. Arriving from another page
+    // (?view=acquisition) opens straight on that view.
+    view: (() => {
+        const wanted = new URLSearchParams(window.location.search).get('view');
+        const known = ['overview', 'subscribers', 'retention', 'acquisition', 'customers', 'cohorts', 'revenue', 'email'];
+        return known.includes(wanted) ? wanted : 'overview';
+    })(),
+
     // --- results ---
     loading: false,
     error: null,
@@ -30,9 +39,17 @@ export default (config = {}) => ({
     revenueChart: null,
     sparks: {},
     topCustomers: [],
-    cohorts: null,
+    // Shaped, not null: x-show hides a section but still evaluates the
+    // x-for inside it, so a null here throws on every first paint.
+    cohorts: { offsets: [], rows: [] },
     // Lifetime value by sign-up month (period-independent).
     cohortValue: { rows: [] },
+    // Acquisition-segment performance; dimension is user-switchable.
+    segments: { dimension: 'utm_source', rows: [], dimensions: [], loading: false },
+    // The live renewal pipeline.
+    renewals: { days: 14, total: 0, at_first_renewal: 0, value: 0, rows: [], loading: false },
+    // Campaign audiences: lists you can push straight to Klaviyo.
+    audience: { key: 'cross_sell', label: '', total: 0, value: 0, rows: [], audiences: {}, loading: false },
     // Month-by-month subscriber history. Fixed once a month closes — a later
     // cancellation moves that month's row, never the ones before it.
     churn: { rows: [], coverage: null },
@@ -57,9 +74,13 @@ export default (config = {}) => ({
     klaviyoRefreshing: false,
 
     // value formatting
-    currencyKeys: ['total_revenue', 'average_order_value', 'subscription_revenue', 'one_time_revenue', 'revenue_at_risk', 'revenue_per_customer'],
+    currencyKeys: ['total_revenue', 'average_order_value', 'subscription_revenue', 'one_time_revenue',
+        'revenue_at_risk', 'revenue_per_customer', 'mrr', 'arr', 'arpu',
+        'gross_revenue', 'net_revenue', 'tax_collected', 'shipping_collected', 'refunded',
+        'net_revenue_after_refunds', 'contribution'],
     percentKeys: ['churn_rate', 'monthly_churn_rate', 'monthly_churn_rate_net', 'net_revenue_retention',
-        'gross_revenue_retention', 'renewal_success_rate', 'repeat_rate', 'end_date_coverage'],
+        'gross_revenue_retention', 'renewal_success_rate', 'repeat_rate', 'end_date_coverage',
+        'customer_churn_rate'],
 
     init() {
         // React to filter changes without wiring each input by hand.
@@ -67,14 +88,19 @@ export default (config = {}) => ({
         // Month/year drive several granularities; clamp the week then refresh once.
         this.$watch('month', () => { this.clampWeek(); this.apply(); });
         this.$watch('year', () => { this.clampWeek(); this.apply(); });
+        this.$watch('view', (v) => this.renderChartsFor(v));
         this.refresh();
         // Period-independent panels — fetch once.
         this.fetchSparklines();
         this.fetchTopCustomers();
         this.fetchCohorts();
         this.fetchCohortValue();
+        this.fetchSegments();
+        this.fetchRenewals();
+        this.fetchAudience();
         this.fetchChurn();
         this.fetchUpsell();
+        this.$nextTick(() => this.trackSections());
     },
 
     /** Day-based weeks within the selected month: 1–7, 8–14, … */
@@ -164,7 +190,7 @@ export default (config = {}) => ({
         // count. Refetched only if the panel is still open.
         this.lost = { ...this.lost, rows: [], total: 0, returned: 0, summary: {}, error: null };
         if (this.lost.open) this.fetchLost();
-        this.$nextTick(() => { this.renderStatusDonut(); this.renderRevenueDonut(); });
+        this.$nextTick(() => { this.renderRevenueDonut(); });
     },
 
     async fetchSparklines() {
@@ -186,6 +212,78 @@ export default (config = {}) => ({
             const res = await fetch('/api/metrics/cohorts?offset=6', { headers: { Accept: 'application/json' } });
             if (res.ok) this.cohorts = await res.json();
         } catch (_) { /* non-critical */ }
+    },
+
+    async fetchSegments(dimension = null) {
+        if (dimension) this.segments.dimension = dimension;
+        this.segments.loading = true;
+        try {
+            const res = await fetch(`/api/metrics/segments?dimension=${this.segments.dimension}&min=5`,
+                { headers: { Accept: 'application/json' } });
+            if (res.ok) {
+                const d = await res.json();
+                this.segments = { ...this.segments, rows: d.rows ?? [], dimensions: d.dimensions ?? [] };
+            }
+        } catch (_) { /* non-critical */ } finally { this.segments.loading = false; }
+    },
+
+    /** Human label for a raw column name. */
+    dimensionLabel(d) {
+        return ({
+            utm_source: 'Source', utm_medium: 'Medium', utm_campaign: 'Campaign',
+            attribution_type: 'Type', device_type: 'Device', coupon_code: 'Coupon',
+            billing_period: 'Cycle', primary_product: 'Product',
+        })[d] ?? d;
+    },
+
+    /** Bar width for the repeat-rate meter, on a 0-100 scale. */
+    repeatBarWidth(pct) {
+        return `${Math.max(2, Math.min(100, pct)).toFixed(1)}%`;
+    },
+
+    async fetchRenewals(days = null) {
+        if (days) this.renewals.days = days;
+        this.renewals.loading = true;
+        try {
+            const res = await fetch(`/api/metrics/renewals?days=${this.renewals.days}`,
+                { headers: { Accept: 'application/json' } });
+            if (res.ok) {
+                const d = await res.json();
+                this.renewals = { ...this.renewals, total: d.total ?? 0, at_first_renewal: d.at_first_renewal ?? 0,
+                    value: d.value ?? 0, rows: d.rows ?? [] };
+            }
+        } catch (_) { /* non-critical */ } finally { this.renewals.loading = false; }
+    },
+
+    async fetchAudience(key = null) {
+        if (key) this.audience.key = key;
+        this.audience.loading = true;
+        try {
+            const res = await fetch(`/api/metrics/audience?audience=${this.audience.key}`,
+                { headers: { Accept: 'application/json' } });
+            if (res.ok) {
+                const d = await res.json();
+                this.audience = { ...this.audience, label: d.label ?? '', total: d.total ?? 0,
+                    value: d.value ?? 0, rows: d.rows ?? [], audiences: d.audiences ?? {} };
+            }
+        } catch (_) { /* non-critical */ } finally { this.audience.loading = false; }
+    },
+
+    audienceExportHref() {
+        return `/api/metrics/audience/export?audience=${this.audience.key}`;
+    },
+
+    /** Currency, or an em dash when the figure has not been supplied. */
+    moneyOrDash(v) {
+        return v === null || v === undefined ? '—' : this.money(v);
+    },
+
+    pctOrDash(v) {
+        return v === null || v === undefined ? '—' : `${v}%`;
+    },
+
+    renewalsExportHref() {
+        return `/api/metrics/renewals/export?days=${this.renewals.days}`;
     },
 
     async fetchCohortValue() {
@@ -221,6 +319,20 @@ export default (config = {}) => ({
                 this.churn = { rows: data.rows ?? [], coverage: data.end_date_coverage ?? null };
             }
         } catch (_) { /* non-critical */ }
+    },
+
+    /** Title for the top bar; mirrors the sidebar labels. */
+    viewLabel() {
+        return ({
+            overview: 'Overview',
+            subscribers: 'Subscribers',
+            retention: 'Retention & Churn',
+            acquisition: 'Acquisition',
+            customers: 'Customers',
+            cohorts: 'Cohort Analysis',
+            revenue: 'Revenue & Orders',
+            email: 'Email Performance',
+        })[this.view] ?? 'Dashboard';
     },
 
     /** Newest month first, the way you read a history table. */
@@ -516,19 +628,81 @@ export default (config = {}) => ({
         'pending-cancel': '#a23e58', expired: '#94a3b8', pending: '#4a9aa0',
     },
 
-    renderStatusDonut() {
-        const ctx = this.$refs.statusCanvas;
-        if (!ctx) return;
+    // Hovered slice per donut, read by the centre label. A doughnut has a hole
+    // the size of a tooltip already; floating one over the chart just covers
+    // the neighbouring slices.
+    donutHover: { revenue: null },
+
+    /** Shared doughnut options: no tooltip, hover reported to the centre. */
+    donutOptions(key) {
+        return {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '70%',
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            onHover: (event, elements, chart) => {
+                const el = elements[0];
+
+                if (!el) {
+                    this.donutHover[key] = null;
+
+                    return;
+                }
+
+                const ds = chart.data.datasets[0];
+                this.donutHover[key] = {
+                    label: chart.data.labels[el.index],
+                    value: ds.data[el.index],
+                    color: ds.backgroundColor[el.index],
+                };
+            },
+        };
+    },
+
+    /** Chart.js reports no hover once the pointer leaves the canvas entirely. */
+    clearDonut(key) {
+        this.donutHover[key] = null;
+    },
+
+    // Statuses a subscription can currently be in. `cancelled`/`expired` are
+    // cumulative history and are reported separately rather than plotted
+    // alongside these — see partials/status-mix.
+    liveStatuses: ['active', 'on-hold', 'pending-cancel', 'pending'],
+
+    liveBookTotal() {
+        return this.liveStatusRows().reduce((n, r) => n + r.count, 0);
+    },
+
+    /** Live states with a share of the live book, biggest first, zeros dropped. */
+    liveStatusRows() {
         const b = this.metrics.subscription_status_breakdown || {};
-        const labels = Object.keys(b);
-        const data = Object.values(b);
-        const colors = labels.map((l) => this.statusColors[l] || '#cbd5e1');
-        if (this.statusChart) this.statusChart.destroy();
-        this.statusChart = new window.Chart(ctx, {
-            type: 'doughnut',
-            data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 0, hoverOffset: 6 }] },
-            options: { responsive: true, maintainAspectRatio: false, cutout: '70%',
-                plugins: { legend: { display: false }, tooltip: { enabled: true } } },
+        const rows = this.liveStatuses
+            .filter((st) => (b[st] ?? 0) > 0)
+            .map((st) => ({ status: st, label: st.replace('-', ' '), count: b[st], color: this.statusColors[st] || '#cbd5e1' }));
+        const total = rows.reduce((n, r) => n + r.count, 0) || 1;
+
+        return rows
+            .map((r) => ({ ...r, pct: Math.round((r.count / total) * 1000) / 10 }))
+            .sort((a, z) => z.count - a.count);
+    },
+
+    endedStatusTotal() {
+        const b = this.metrics.subscription_status_breakdown || {};
+
+        return Object.entries(b)
+            .filter(([st]) => ! this.liveStatuses.includes(st))
+            .reduce((n, [, v]) => n + v, 0);
+    },
+
+    /**
+     * Charts render at zero size inside a hidden view, so a view that was not
+     * on screen when the data arrived shows a blank or clipped canvas. Redraw
+     * on the way in.
+     */
+    renderChartsFor(view) {
+        this.$nextTick(() => {
+            if (view === 'overview') this.renderTrend?.();
+            if (view === 'revenue') this.renderRevenueDonut();
         });
     },
 
@@ -540,8 +714,7 @@ export default (config = {}) => ({
         this.revenueChart = new window.Chart(ctx, {
             type: 'doughnut',
             data: { labels: ['Subscription', 'One-time'], datasets: [{ data, backgroundColor: ['#d46681', '#61bac0'], borderWidth: 0, hoverOffset: 6 }] },
-            options: { responsive: true, maintainAspectRatio: false, cutout: '70%',
-                plugins: { legend: { display: false }, tooltip: { enabled: true } } },
+            options: this.donutOptions('revenue'),
         });
     },
 
@@ -667,11 +840,52 @@ export default (config = {}) => ({
         return c > 0 ? '↑' : '↓';
     },
 
+    /**
+     * Green for movement in the good direction, red for the bad one.
+     *
+     * Which way is "good" is per metric: revenue rising is good, churn rising
+     * is not. Colouring every increase green paints a worsening churn rate as
+     * a win, so the direction comes from the metric table in the blade.
+     */
     changeBadgeClass(key) {
         const c = this.change(key);
-        if (c === null || c === undefined) return 'bg-indigo-50 text-indigo-600';
-        if (c > 0) return 'bg-emerald-50 text-emerald-700';
-        if (c < 0) return 'bg-rose-50 text-rose-700';
-        return 'bg-slate-100 text-slate-500';
+        if (c === null || c === undefined) return 'bg-slate-100 text-slate-500';
+        if (c === 0) return 'bg-slate-100 text-slate-500';
+
+        const dir = (config.directions ?? {})[key] ?? 'flat';
+        if (dir === 'flat') return 'bg-slate-100 text-slate-600';
+
+        const better = dir === 'good' ? c > 0 : c < 0;
+        return better ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700';
+    },
+
+    /** A zero is not news; chips dim themselves rather than compete. */
+    isZero(key) {
+        const v = this.metrics?.[key];
+        return v === 0 || v === '0';
+    },
+
+    // --- sticky section nav ---
+    activeSection: '',
+
+    /** Highlight whichever section heading is nearest the top of the viewport. */
+    trackSections() {
+        const ids = Array.from(document.querySelectorAll('[data-section]'));
+        if (!ids.length) return;
+
+        const pick = () => {
+            let current = ids[0]?.dataset.section ?? '';
+            for (const el of ids) {
+                if (el.getBoundingClientRect().top <= 120) current = el.dataset.section;
+            }
+            this.activeSection = current;
+        };
+
+        pick();
+        window.addEventListener('scroll', pick, { passive: true });
+    },
+
+    goToSection(id) {
+        document.querySelector(`[data-section="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     },
 });

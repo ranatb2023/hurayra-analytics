@@ -194,6 +194,73 @@ class RevenueRetentionTest extends TestCase
         $this->assertNull($m['gross_revenue_retention']);
     }
 
+    // --------------------------------------------------------- retention series
+
+    public function test_the_series_agrees_with_compute_month_by_month(): void
+    {
+        // Two subscribers on the books; one leaves in June.
+        $this->sub(1, 'active', '2026-01-01 00:00:00');
+        $this->order(100, 1, '2026-04-01 00:00:00', 20.0);
+        $this->sub(2, 'cancelled', '2026-01-01 00:00:00', '2026-06-15 00:00:00');
+        $this->order(101, 2, '2026-04-01 00:00:00', 20.0);
+        $this->order(102, null, '2026-06-20 00:00:00', 5.0); // anchors the walk
+
+        $rows = collect($this->metrics->retentionSeries(6)['rows'])->keyBy('month');
+
+        foreach (['2026-04', '2026-05', '2026-06'] as $month) {
+            $start = CarbonImmutable::parse($month.'-01');
+            $expected = $this->metrics->compute($start, $start->addMonth());
+
+            // The series exists purely to avoid running compute() twelve times;
+            // if the two ever disagree the sparkline is telling a different
+            // story from the card above it.
+            $this->assertSame($expected['monthly_churn_rate_net'], $rows[$month]['churn_net'], $month.' churn');
+            $this->assertSame($expected['net_revenue_retention'], $rows[$month]['nrr'], $month.' nrr');
+        }
+    }
+
+    public function test_the_series_nets_failed_signups_out_of_churn(): void
+    {
+        $this->sub(1, 'active', '2026-01-01 00:00:00');
+        $this->order(100, 1, '2026-04-01 00:00:00', 20.0);
+        // Signed up and died in June without ever paying.
+        $this->sub(2, 'cancelled', '2026-06-02 00:00:00', '2026-06-03 00:00:00');
+        $this->order(101, null, '2026-06-20 00:00:00', 5.0);
+
+        $june = collect($this->metrics->retentionSeries(6)['rows'])->firstWhere('month', '2026-06');
+
+        // One leaver, but it never billed, so real churn is zero.
+        $this->assertSame(0.0, $june['churn_net']);
+    }
+
+    public function test_the_series_returns_a_row_per_trailing_month(): void
+    {
+        $this->sub(1, 'active', '2026-01-01 00:00:00');
+        $this->order(100, 1, '2026-06-20 00:00:00', 5.0);
+
+        $rows = $this->metrics->retentionSeries(4)['rows'];
+
+        $this->assertSame(['2026-03', '2026-04', '2026-05', '2026-06'], array_column($rows, 'month'));
+    }
+
+    public function test_sparklines_endpoint_carries_the_computed_series(): void
+    {
+        $this->sub(1, 'active', '2026-01-01 00:00:00');
+        $this->order(100, 1, '2026-04-01 00:00:00', 20.0);
+        $this->sub(2, 'cancelled', '2026-01-01 00:00:00', '2026-06-15 00:00:00');
+        $this->order(101, 2, '2026-04-01 00:00:00', 20.0);
+
+        $res = $this->getJson('/api/metrics/sparklines?granularity=month')->assertOk();
+
+        $res->assertJsonStructure(['new_subscribers', 'completed', 'total_revenue',
+            'monthly_churn_rate_net', 'net_revenue_retention']);
+
+        // Nulls would break the SVG path, so they must never reach the client.
+        foreach ($res->json('net_revenue_retention') as $v) {
+            $this->assertNotNull($v);
+        }
+    }
+
     // ------------------------------------------------------------ cohort value
 
     public function test_cohort_value_reports_earnings_per_sign_up_month(): void

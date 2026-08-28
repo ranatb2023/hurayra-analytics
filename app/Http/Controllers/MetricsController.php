@@ -6,6 +6,7 @@ use App\Services\MetricsService;
 use App\Support\PeriodResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class MetricsController extends Controller
@@ -13,8 +14,7 @@ class MetricsController extends Controller
     public function __construct(
         private readonly MetricsService $metrics,
         private readonly PeriodResolver $resolver,
-    ) {
-    }
+    ) {}
 
     /** AJAX endpoint: all metric cards + comparison for the active filter. */
     public function summary(Request $request): JsonResponse
@@ -56,7 +56,7 @@ class MetricsController extends Controller
     }
 
     /** Print-optimised client report (a curated subset, for the active filter). */
-    public function clientReport(Request $request): \Illuminate\View\View
+    public function clientReport(Request $request): View
     {
         $validated = $this->validateFilter($request);
         $period = $this->resolver->resolve($validated);
@@ -143,6 +143,87 @@ class MetricsController extends Controller
         return response()->json($this->metrics->cohortValue($cohorts));
     }
 
+    /** AJAX endpoint: acquisition-segment performance (channel, device, cycle). */
+    public function segments(Request $request): JsonResponse
+    {
+        return response()->json($this->metrics->segmentPerformance(
+            $request->string('dimension', 'utm_source')->toString(),
+            min(100, max(1, (int) $request->integer('min', 5))),
+        ) + ['dimensions' => MetricsService::SEGMENT_DIMENSIONS]);
+    }
+
+    /** AJAX endpoint: the live renewal pipeline for the next N days. */
+    public function upcomingRenewals(Request $request): JsonResponse
+    {
+        return response()->json($this->metrics->upcomingRenewals(
+            min(90, max(1, (int) $request->integer('days', 14))),
+            limit: 200,
+        ));
+    }
+
+    /** Download the renewal pipeline as a campaign audience. */
+    public function upcomingRenewalsExport(Request $request): StreamedResponse
+    {
+        $days = min(90, max(1, (int) $request->integer('days', 14)));
+        $data = $this->metrics->upcomingRenewals($days, limit: null);
+
+        return response()->streamDownload(function () use ($data) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, [
+                'Subscription ID', 'Customer', 'Status', 'Renews on', 'Days away',
+                'Payments so far', 'Amount', 'Source', 'Cycle (days)', 'At first renewal',
+            ]);
+
+            foreach ($data['rows'] as $r) {
+                fputcsv($out, [
+                    $r['id'], $r['customer'] ?? '', $r['status'], $r['due_at'], $r['days_away'],
+                    $r['payments_so_far'], $r['amount'], $r['source'] ?? '', $r['cycle_days'],
+                    $r['first_renewal'] ? 'yes' : 'no',
+                ]);
+            }
+        }, 'hurayra-renewals-next-'.$days.'-days.csv', ['Content-Type' => 'text/csv']);
+    }
+
+    /** Audiences a salesperson can act on: cross-sell, win-back, prospects. */
+    public const AUDIENCES = [
+        'cross_sell' => 'Single-flavour subscribers · Combo upgrade',
+        'win_back' => 'Fully churned, 3+ payments · proven buyers',
+        'never_subscribed' => 'One-time buyers who never subscribed',
+        'partial_churn' => 'Cancelled one plan, still subscribed · cross-sell',
+    ];
+
+    /** AJAX endpoint: one campaign audience. */
+    public function audience(Request $request): JsonResponse
+    {
+        $key = $request->string('audience', 'cross_sell')->toString();
+        $key = array_key_exists($key, self::AUDIENCES) ? $key : 'cross_sell';
+
+        return response()->json(
+            $this->metrics->audience($key, limit: 500)
+            + ['label' => self::AUDIENCES[$key], 'audiences' => self::AUDIENCES]
+        );
+    }
+
+    /** Download an audience as a campaign list. */
+    public function audienceExport(Request $request): StreamedResponse
+    {
+        $key = $request->string('audience', 'cross_sell')->toString();
+        $key = array_key_exists($key, self::AUDIENCES) ? $key : 'cross_sell';
+        $data = $this->metrics->audience($key, limit: null);
+
+        return response()->streamDownload(function () use ($data) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, ['Customer', 'Subscription ID', 'Detail', 'Cycle', 'Date', 'Payments', 'Lifetime spend']);
+
+            foreach ($data['rows'] as $r) {
+                fputcsv($out, [
+                    $r['customer'], $r['subscription_id'] ?? '', $r['detail'] ?? '',
+                    $r['cycle'] ?? '', $r['next_at'] ?? '', $r['payments'], $r['value'],
+                ]);
+            }
+        }, 'hurayra-audience-'.$key.'.csv', ['Content-Type' => 'text/csv']);
+    }
+
     /** AJAX endpoint: month-by-month subscriber history and churn rate. */
     public function churn(Request $request): JsonResponse
     {
@@ -223,6 +304,19 @@ class MetricsController extends Controller
             // Keep the last 12 buckets for a compact sparkline.
             $out[$metric] = array_slice($series['values'], -12);
         }
+
+        // Churn and revenue retention are computed per month rather than
+        // bucketed from rows, so they come from their own walk. Months with no
+        // base yield null, which would break the path - drop those points.
+        $retention = $this->metrics->retentionSeries(12)['rows'];
+        $out['monthly_churn_rate_net'] = array_values(array_filter(
+            array_column($retention, 'churn_net'),
+            fn ($v) => $v !== null,
+        ));
+        $out['net_revenue_retention'] = array_values(array_filter(
+            array_column($retention, 'nrr'),
+            fn ($v) => $v !== null,
+        ));
 
         return response()->json($out);
     }
