@@ -67,6 +67,9 @@ class MetricsController extends Controller
         return view('reports.client', [
             'period' => $period,
             'm' => $data['metrics'],
+            // The period's cards answer "how was this month". A client also
+            // wants the shape of the year they are paying for.
+            'history' => $this->metrics->history(12)['rows'],
             'generatedAt' => now(),
         ]);
     }
@@ -311,28 +314,30 @@ class MetricsController extends Controller
         }, $filename, ['Content-Type' => 'text/csv']);
     }
 
-    /** AJAX endpoint: small monthly series for the headline sparklines. */
+    /**
+     * AJAX endpoint: small monthly series for the headline sparklines.
+     *
+     * Only the row-bucketed metrics. Churn, retention and MRR are month-walked
+     * figures that {@see history()} already returns, and repeating that walk
+     * here made every page load pay for the whole subscription book twice.
+     */
     public function sparklines(Request $request): JsonResponse
     {
+        $partial = $this->metrics->partialBucket('month');
         $out = [];
+
         foreach (['new_subscribers', 'completed', 'total_revenue'] as $metric) {
             $series = $this->metrics->trend($metric, 'month');
-            // Keep the last 12 buckets for a compact sparkline.
-            $out[$metric] = array_slice($series['values'], -12);
-        }
+            $values = $series['values'];
 
-        // Churn and revenue retention are computed per month rather than
-        // bucketed from rows, so they come from their own walk. Months with no
-        // base yield null, which would break the path - drop those points.
-        $retention = $this->metrics->retentionSeries(12)['rows'];
-        $out['monthly_churn_rate_net'] = array_values(array_filter(
-            array_column($retention, 'churn_net'),
-            fn ($v) => $v !== null,
-        ));
-        $out['net_revenue_retention'] = array_values(array_filter(
-            array_column($retention, 'nrr'),
-            fn ($v) => $v !== null,
-        ));
+            // The month still filling up would draw a dip into every headline
+            // card. Drop it rather than show a fall that has not happened.
+            if (end($series['labels']) === $partial) {
+                array_pop($values);
+            }
+
+            $out[$metric] = array_slice($values, -12);
+        }
 
         return response()->json($out);
     }
@@ -344,7 +349,7 @@ class MetricsController extends Controller
         $period = $this->resolver->resolve($validated);
         $data = $this->metrics->summary($period, strictNotCompleted: $request->boolean('strict'), compare: $request->boolean('compare'));
 
-        $history = $this->metrics->churnSeries();
+        $history = $this->metrics->history();
 
         $filename = 'hurayra-metrics-'.str_replace([' ', ':', '–', '/'], '-', $period->label).'.csv';
 
@@ -386,7 +391,10 @@ class MetricsController extends Controller
 
             // Month-by-month subscriber history — fixed once a month closes.
             fputcsv($out, []);
-            fputcsv($out, ['Month', 'Active at start', 'New', 'Churned', 'Active at end', 'Churn rate %']);
+            fputcsv($out, [
+                'Month', 'Active at start', 'New', 'Churned', 'Active at end', 'Churn rate %',
+                'Real churn %', 'NRR %', 'MRR', 'Paying subscribers', 'Month complete',
+            ]);
             foreach ($history['rows'] as $row) {
                 fputcsv($out, [
                     $row['month'],
@@ -395,6 +403,13 @@ class MetricsController extends Controller
                     $row['churned'],
                     $row['active_end'],
                     $row['churn_rate'] ?? '',
+                    $row['churn_net'] ?? '',
+                    $row['nrr'] ?? '',
+                    $row['mrr'] ?? '',
+                    $row['paying'] ?? '',
+                    // A partial month read as a finished one is the single
+                    // easiest way to misreport a fall in a spreadsheet.
+                    $row['partial'] ? 'no — still in progress' : 'yes',
                 ]);
             }
         }, $filename, ['Content-Type' => 'text/csv']);

@@ -439,6 +439,9 @@ class MetricsService
             'unit' => $spec['unit'],
             'breakdown' => $breakdown,
             'labels' => $labels,
+            // Which point, if any, is a bucket still filling up. Drawn solid it
+            // reads as a fall that has not happened.
+            'partial_bucket' => $this->partialBucket($granularity),
         ];
 
         if ($breakdown === null) {
@@ -770,18 +773,7 @@ class MetricsService
             return ['rows' => []];
         }
 
-        // subscription id => [[date, amount], ...] oldest first.
-        $payments = [];
-        foreach (DB::table('records')
-            ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
-            ->whereNotNull('subscription_id')
-            ->whereNotNull('date_created_gmt')
-            ->orderBy('date_created_gmt')
-            ->select('subscription_id', 'date_created_gmt', 'total_amount')
-            ->get() as $o) {
-            $payments[(int) $o->subscription_id][] = [(string) $o->date_created_gmt, (float) $o->total_amount];
-        }
+        $payments = $this->completedPaymentsBySubscription();
 
         $latest = $this->latestDataInstant();
         $lastMonth = $latest->startOfMonth();
@@ -866,13 +858,18 @@ class MetricsService
     {
         $churn = $this->churnSeries($months);
         $rates = array_column($this->retentionSeries($months)['rows'], null, 'month');
+        $money = array_column($this->mrrSeries($months)['rows'], null, 'month');
 
-        $rows = array_map(function (array $row) use ($rates) {
+        $rows = array_map(function (array $row) use ($rates, $money) {
             $rate = $rates[$row['month']] ?? [];
+            $mrr = $money[$row['month']] ?? [];
 
             return $row + [
                 'churn_net' => $rate['churn_net'] ?? null,
                 'nrr' => $rate['nrr'] ?? null,
+                'mrr' => $mrr['mrr'] ?? null,
+                'arpu' => $mrr['arpu'] ?? null,
+                'paying' => $mrr['paying'] ?? null,
             ];
         }, $churn['rows']);
 
@@ -894,6 +891,119 @@ class MetricsService
         $latest = (string) DB::table('records')->max('date_created_gmt');
 
         return CarbonImmutable::parse($latest !== '' ? $latest : 'now');
+    }
+
+    /**
+     * Month-by-month recurring revenue.
+     *
+     * {@see recurringRevenue()} answers "what is the book worth now" by reading
+     * `status = 'active'`, which is a live value. Asking it about March would
+     * price March using the subscriptions still running today, so it cannot be
+     * walked backwards. This uses the same lifecycle dates the subscriber
+     * counts use, which is what makes a closed month's MRR stay put.
+     *
+     * Each subscription contributes its last payment normalised to 30 days:
+     * about a quarter of this book renews on something other than a monthly
+     * cycle, and booking a six-weekly payment as a month of revenue overstates
+     * it by half.
+     *
+     * @param  int  $months  trailing months to return (1-60)
+     * @return array{rows: array<int, array{month:string, mrr:float, arr:float, arpu:?float, paying:int, partial:bool}>}
+     */
+    public function mrrSeries(int $months = self::CHURN_SERIES_MONTHS): array
+    {
+        $months = max(1, min(60, $months));
+
+        $subs = $this->subscriptionLifecycle()
+            ->whereNotNull('s.date_created_gmt')
+            ->selectRaw('s.id, s.status, s.date_created_gmt as created, s.billing_period, '.
+                's.billing_interval, '.$this->effectiveEndExpr().' as ended')
+            ->get()
+            ->map(fn ($r) => [
+                'id' => (int) $r->id,
+                'created' => (string) $r->created,
+                'ended' => $r->ended === null ? null : (string) $r->ended,
+                'terminal' => in_array((string) $r->status, self::TERMINAL, true),
+                'active' => (string) $r->status === 'active',
+                // What one month of this subscription is worth, as a share of
+                // whatever it pays per cycle.
+                'monthly_share' => 30 / $this->cycleDays(
+                    $r->billing_period === null ? null : (string) $r->billing_period,
+                    $r->billing_interval === null ? null : (int) $r->billing_interval,
+                ),
+            ])
+            ->all();
+
+        if ($subs === []) {
+            return ['rows' => []];
+        }
+
+        $payments = $this->completedPaymentsBySubscription();
+
+        $latest = $this->latestDataInstant();
+        $lastMonth = $latest->startOfMonth();
+        $firstMonth = $lastMonth->subMonths($months - 1);
+
+        $rows = [];
+
+        for ($cursor = $firstMonth; $cursor <= $lastMonth; $cursor = $cursor->addMonth()) {
+            $monthEnd = $cursor->addMonth();
+            $endS = $monthEnd->toDateTimeString();
+
+            $mrr = 0.0;
+            $paying = 0;
+
+            foreach ($subs as $sub) {
+                if (! $this->wasActiveAt($sub, $endS)) {
+                    continue;
+                }
+
+                $amount = $this->paymentBefore($payments[$sub['id']] ?? [], $endS);
+
+                if ($amount <= 0.0) {
+                    continue; // never billed, so nothing is recurring yet
+                }
+
+                $paying++;
+                $mrr += $amount * $sub['monthly_share'];
+            }
+
+            $rows[] = [
+                'month' => $cursor->format('Y-m'),
+                'mrr' => round($mrr, 2),
+                'arr' => round($mrr * 12, 2),
+                // MRR is paying subscribers times what each of them pays.
+                // Carrying both says which of the two actually moved.
+                'arpu' => $paying > 0 ? round($mrr / $paying, 2) : null,
+                'paying' => $paying,
+                'partial' => $latest->lt($monthEnd),
+            ];
+        }
+
+        return ['rows' => $rows];
+    }
+
+    /**
+     * Every completed payment, keyed by subscription, oldest first.
+     *
+     * @return array<int, array<int, array{0:string, 1:float}>>
+     */
+    private function completedPaymentsBySubscription(): array
+    {
+        $payments = [];
+
+        foreach (DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('status', 'completed')
+            ->whereNotNull('subscription_id')
+            ->whereNotNull('date_created_gmt')
+            ->orderBy('date_created_gmt')
+            ->select('subscription_id', 'date_created_gmt', 'total_amount')
+            ->get() as $o) {
+            $payments[(int) $o->subscription_id][] = [(string) $o->date_created_gmt, (float) $o->total_amount];
+        }
+
+        return $payments;
     }
 
     /**
@@ -2567,16 +2677,42 @@ class MetricsService
         $driver = DB::connection()->getDriverName();
         $col = 'date_created_gmt';
 
+        // Step back three days, then forward to the next Thursday: that lands
+        // on the Thursday of the row's own ISO week, whatever weekday it is.
+        $thursday = "date({$col}, '-3 days', 'weekday 4')";
+
         return match ($granularity) {
             'year' => $driver === 'sqlite'
                 ? "strftime('%Y', {$col})"
                 : "DATE_FORMAT({$col}, '%Y')",
+            // ISO-8601, to match MySQL's %x-%v: a week's Thursday decides both
+            // its number and the year it belongs to, which is what puts an
+            // early 1 January in the last week of the year before.
             'week' => $driver === 'sqlite'
-                ? "strftime('%Y-W%W', {$col})"
+                ? "strftime('%Y', {$thursday}) || '-W' || printf('%02d', (strftime('%j', {$thursday}) - 1) / 7 + 1)"
                 : "DATE_FORMAT({$col}, '%x-W%v')",
             default => $driver === 'sqlite' // month (and custom fallback)
                 ? "strftime('%Y-%m', {$col})"
                 : "DATE_FORMAT({$col}, '%Y-%m')",
+        };
+    }
+
+    /**
+     * The label of the bucket the data stops inside, for a given granularity.
+     *
+     * Every chart needs to know which of its points is not finished yet, and
+     * the answer has to be derived the way {@see bucketExpression()} derives
+     * its labels -- ISO weeks included -- or the comparison silently never
+     * matches and the marking quietly does nothing.
+     */
+    public function partialBucket(string $granularity): string
+    {
+        $latest = $this->latestDataInstant();
+
+        return match ($granularity) {
+            'year' => $latest->format('Y'),
+            'week' => $latest->format('o-\WW'),
+            default => $latest->format('Y-m'),
         };
     }
 

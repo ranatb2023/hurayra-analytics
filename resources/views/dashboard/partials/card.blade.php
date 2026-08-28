@@ -54,6 +54,16 @@
             @endif
         </dt>
         <dd class="mt-0.5 text-[26px] font-bold leading-tight tracking-tight text-slate-900" x-text="value('{{ $key }}')"></dd>
+
+        {{-- Twelve closed months behind the one number. A card says where the
+             metric is; this says which way it has been going to get there. --}}
+        <template x-if="sparkFor('{{ $key }}').length > 1">
+            <svg class="mt-1 h-7 w-full" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
+                <path :d="sparkPath(sparkFor('{{ $key }}'))" fill="none" stroke-width="2"
+                      stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"
+                      class="{{ $dir === 'bad' ? 'stroke-rose-300' : ($dir === 'good' ? 'stroke-emerald-300' : 'stroke-slate-300') }}" />
+            </svg>
+        </template>
         @if ($note)
             <p class="mt-0.5 truncate text-[11px] text-slate-400" x-text="{{ $note }}"></p>
         @endif

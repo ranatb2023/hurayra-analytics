@@ -257,6 +257,27 @@
                             'id' => 'trendBreakdown', 'model' => 'trendBreakdown', 'options' => 'breakdownOptions()',
                             'onChange' => 'fetchTrend()', 'width' => 'w-36', 'compact' => true,
                         ])
+
+                        {{-- Seasonal business: the same month last year is a
+                             fairer comparison than the month before. --}}
+                        <button type="button" @click="toggleTrendYoY()" x-show="canCompareYear()" x-cloak
+                                class="rounded-lg border px-2.5 py-1.5 text-xs font-medium transition"
+                                :class="trendYoY
+                                    ? 'border-slate-800 bg-slate-900 text-white'
+                                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'">
+                            vs last year
+                        </button>
+
+                        <div class="flex overflow-hidden rounded-lg border border-slate-200">
+                            <template x-for="opt in trendTypeOptions()" :key="opt.value">
+                                <button type="button" @click="setTrendType(opt.value)"
+                                        class="px-2.5 py-1.5 text-xs font-medium transition"
+                                        :class="trendType === opt.value
+                                            ? 'bg-slate-900 text-white'
+                                            : 'bg-white text-slate-600 hover:bg-slate-50'"
+                                        x-text="opt.label"></button>
+                            </template>
+                        </div>
                     </div>
                 </div>
                 <div class="h-64"><canvas x-ref="trendCanvas"></canvas></div>
@@ -609,9 +630,20 @@
          so sharing a scale would flatten one of them into a straight line. --}}
     <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2" x-show="churn.rows.length" x-cloak>
         <div class="print-block rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm">
-            <h3 class="text-sm font-bold text-slate-700">
-                Churn Rate <span class="font-medium text-slate-400">· last 12 months</span>
-            </h3>
+            <div class="flex items-start justify-between gap-3">
+                <h3 class="text-sm font-bold text-slate-700">
+                    Churn Rate <span class="font-medium text-slate-400">· last 12 months</span>
+                </h3>
+                {{-- 50-75 sign-ups a month: one bad fortnight swings the rate by
+                     ten points, so the raw line overstates how much changed. --}}
+                <button type="button" @click="toggleSmoothing()"
+                        class="no-print shrink-0 rounded-lg border px-2 py-1 text-[11px] font-medium transition"
+                        :class="smoothRates
+                            ? 'border-slate-800 bg-slate-900 text-white'
+                            : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'">
+                    3-mo avg
+                </button>
+            </div>
             <p class="mt-1 text-xs text-slate-500">
                 Real churn (solid) leaves out subscriptions that ended having never been billed — a broken checkout,
                 not a lost customer. The dashed line is the gross rate those are still counted in.
@@ -1112,6 +1144,25 @@
 
     {{-- =================== REVENUE =================== --}}
     <div x-show="view === 'revenue'" x-cloak>
+    {{-- Recurring revenue as a movement. The MRR card is one instant; this is
+         the only place the direction of the subscription business is visible. --}}
+    <div class="mb-4 print-block rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm"
+         x-show="churn.rows.length" x-cloak>
+        <h3 class="text-sm font-bold text-slate-700">
+            Recurring Revenue <span class="font-medium text-slate-400">· last 12 months</span>
+        </h3>
+        <p class="mt-1 text-xs text-slate-500">
+            Every subscription active at each month's end, priced at its most recent payment and normalised to 30 days.
+            The second line is what one subscriber pays — MRR is that figure multiplied by how many are paying, so the
+            two together say whether growth came from more subscribers or from a bigger basket.
+        </p>
+        <div class="mt-4 h-64"><canvas x-ref="mrrCanvas"></canvas></div>
+        <p x-show="partialMonthLabel()" x-cloak class="mt-2 text-xs text-amber-700">
+            <span class="font-semibold" x-text="partialMonthLabel()"></span> is still filling up — the dashed segment
+            counts a partial month.
+        </p>
+    </div>
+
     {{-- ============ Orders ============ --}}
     @include('dashboard.partials.section-heading', ['title' => 'Orders', 'id' => 'orders', 'bar' => 'from-sky-400 to-blue-500'])
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

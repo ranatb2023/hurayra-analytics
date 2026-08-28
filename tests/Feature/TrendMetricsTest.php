@@ -203,6 +203,50 @@ class TrendMetricsTest extends TestCase
         $this->assertSame([], $trend['series']);
     }
 
+    // ------------------------------------------------------------- ISO weeks
+
+    public function test_weeks_are_iso_so_a_sunday_stays_with_the_monday_before_it(): void
+    {
+        // Mon 24 Aug and Sun 30 Aug 2026 are the two ends of one ISO week.
+        // Under SQLite's %W (Sunday-start) they landed in different buckets
+        // while MySQL put them together — the same data, two answers.
+        $this->order(1, '2026-08-24 09:00:00');
+        $this->order(2, '2026-08-30 09:00:00');
+
+        $trend = $this->metrics->trend('completed', 'week');
+
+        $this->assertSame(['2026-W35'], $trend['labels']);
+        $this->assertSame([2], $trend['values']);
+    }
+
+    public function test_an_early_january_belongs_to_the_last_week_of_the_year_before(): void
+    {
+        // Fri 1 Jan 2027 sits in the ISO week whose Thursday is 31 Dec 2026,
+        // so it belongs to 2026-W53 — the case a naive year+week gets wrong.
+        $this->order(1, '2027-01-01 09:00:00');
+
+        $this->assertSame(['2026-W53'], $this->metrics->trend('completed', 'week')['labels']);
+    }
+
+    public function test_the_first_week_of_a_year_starting_on_thursday_is_week_one(): void
+    {
+        $this->order(1, '2026-01-01 09:00:00');   // a Thursday
+
+        $this->assertSame(['2026-W01'], $this->metrics->trend('completed', 'week')['labels']);
+    }
+
+    public function test_the_partial_bucket_is_named_the_same_way_the_buckets_are(): void
+    {
+        $this->order(1, '2026-08-28 09:00:00');
+
+        // Both sides of the comparison the charts make, from the same instant.
+        $trend = $this->metrics->trend('completed', 'week');
+
+        $this->assertSame('2026-W35', $trend['partial_bucket']);
+        $this->assertSame([$trend['partial_bucket']], $trend['labels']);
+        $this->assertSame('2026-08', $this->metrics->trend('completed', 'month')['partial_bucket']);
+    }
+
     // --------------------------------------------------------------- endpoint
 
     public function test_endpoint_returns_a_split_trend(): void

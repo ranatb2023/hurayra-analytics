@@ -163,6 +163,54 @@
             </p>
         </div>
 
+        {{-- Twelve months behind the period's cards. A client reading one
+             month in isolation cannot tell a bad month from a trend, and the
+             cards above are one month by construction. --}}
+        @php
+            // Never a month that has not finished: a partial August read as a
+            // finished one is the easiest way to report a collapse that did
+            // not happen — and this page is the one that leaves the building.
+            $historyRows = collect($history ?? [])->reject(fn ($r) => $r['partial'])->values();
+        @endphp
+        @if ($historyRows->isNotEmpty())
+            <h2 class="mb-2 mt-6 text-xs font-bold uppercase tracking-wider text-slate-500">The last 12 months</h2>
+            <table class="w-full border-collapse text-[11px]">
+                <thead>
+                    <tr class="border-b border-slate-200 text-left text-slate-500">
+                        <th class="py-1.5 font-semibold">Month</th>
+                        <th class="py-1.5 text-right font-semibold">New</th>
+                        <th class="py-1.5 text-right font-semibold">Lost</th>
+                        <th class="py-1.5 text-right font-semibold">Subscribers</th>
+                        <th class="py-1.5 text-right font-semibold">Churn</th>
+                        <th class="py-1.5 text-right font-semibold">NRR</th>
+                        <th class="py-1.5 text-right font-semibold">MRR</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach ($historyRows as $row)
+                        <tr class="border-b border-slate-100">
+                            <td class="py-1.5 font-medium text-slate-700">
+                                {{ \Carbon\CarbonImmutable::parse($row['month'].'-01')->format('M Y') }}
+                            </td>
+                            <td class="py-1.5 text-right tabular-nums text-slate-600">{{ number_format($row['new']) }}</td>
+                            <td class="py-1.5 text-right tabular-nums text-slate-600">{{ number_format($row['churned']) }}</td>
+                            <td class="py-1.5 text-right font-semibold tabular-nums text-slate-900">{{ number_format($row['active_end']) }}</td>
+                            <td class="py-1.5 text-right tabular-nums text-slate-600">{{ $pct($row['churn_net'] ?? null) }}</td>
+                            <td class="py-1.5 text-right tabular-nums text-slate-600">{{ $pct($row['nrr'] ?? null) }}</td>
+                            <td class="py-1.5 text-right tabular-nums text-slate-600">
+                                {{ $row['mrr'] === null ? '—' : $gbp($row['mrr']) }}
+                            </td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+            <p class="mt-2 text-[11px] text-slate-400">
+                Churn excludes sign-ups that never completed an order. NRR is what the opening book was still billing at
+                the month's end, so above 100% the existing subscribers grew without any new ones. The month in progress
+                is left out rather than shown part-counted.
+            </p>
+        @endif
+
         <p class="mt-8 text-center text-[11px] text-slate-400">Hurayra Analytics · {{ $period->label }} · generated {{ $generatedAt->format('M j, Y g:i A') }}</p>
     </div>
 

@@ -18,6 +18,9 @@ export default (config = {}) => ({
     trendType: 'line',
     trendBreakdown: '',   // '' = one line; otherwise an attribution column
     trendOther: 0,        // segments the split left unplotted
+    trendYoY: false,      // overlay the same metric a year earlier
+    smoothRates: true,    // 3-month average over the noisy rate charts
+    chartLabels: [],      // buckets the trend last drew, for the YoY guard
     openDropdown: null, // id of the currently open custom dropdown
 
     // Which view is on screen. The rail switches this rather than navigating,
@@ -42,6 +45,7 @@ export default (config = {}) => ({
     growthChart: null,
     churnRateChart: null,
     nrrChart: null,
+    mrrChart: null,
     sparks: {},
     topCustomers: [],
     // Shaped, not null: x-show hides a section but still evaluates the
@@ -331,9 +335,34 @@ export default (config = {}) => ({
             if (res.ok) {
                 const data = await res.json();
                 this.churn = { rows: data.rows ?? [], coverage: data.end_date_coverage ?? null };
+                this.deriveSparks();
                 this.$nextTick(() => this.renderHistoryCharts());
             }
         } catch (_) { /* non-critical */ }
+    },
+
+    /**
+     * Sparklines for the month-walked headline metrics, taken from the history
+     * rows already on hand rather than a second pass over the whole book.
+     *
+     * The in-progress month is dropped: a card showing a number for August
+     * beside a line that dives at August is telling two different stories.
+     */
+    deriveSparks() {
+        const closed = (this.churn.rows ?? []).filter((r) => !r.partial);
+        const series = (field) => closed.map((r) => r[field]).filter((v) => v !== null && v !== undefined);
+
+        this.sparks = {
+            ...this.sparks,
+            mrr: series('mrr'),
+            net_revenue_retention: series('nrr'),
+            monthly_churn_rate_net: series('churn_net'),
+        };
+    },
+
+    /** The values behind one card's sparkline, or [] when it has none. */
+    sparkFor(key) {
+        return this.sparks?.[key] ?? [];
     },
 
     /** Title for the top bar; mirrors the sidebar labels. */
@@ -561,6 +590,26 @@ export default (config = {}) => ({
     seriesColors: ['#d46681', '#61bac0', '#e4b450', '#4a9aa0', '#a23e58', '#94a3b8'],
 
     /** A trend value in its own unit — money, a rate, or a plain count. */
+    /** Chart types the trend offers. Counts read better as bars. */
+    trendTypeOptions() {
+        return [{ value: 'line', label: 'Line' }, { value: 'bar', label: 'Bars' }];
+    },
+
+    setTrendType(type) {
+        this.trendType = type;
+        this.fetchTrend().catch(() => {});
+    },
+
+    toggleTrendYoY() {
+        this.trendYoY = !this.trendYoY;
+        this.fetchTrend().catch(() => {});
+    },
+
+    /** Enough history for a year-on-year overlay to have anything to say. */
+    canCompareYear() {
+        return (this.chartLabels ?? []).length > 12 && this.granularity !== 'custom';
+    },
+
     trendValueLabel(v, unit) {
         if (v === null || v === undefined) return '—';
         if (unit === 'currency') return this.money(v);
@@ -591,6 +640,14 @@ export default (config = {}) => ({
         const split = !!data.breakdown;
 
         this.trendOther = data.other_segments ?? 0;
+        this.chartLabels = data.labels ?? [];
+
+        // Which point is a bucket still filling up, so the last segment can be
+        // drawn dashed instead of reading as a collapse.
+        const partialAt = (data.labels ?? []).indexOf(data.partial_bucket);
+        const partialSegment = partialAt >= 0
+            ? { borderDash: (c) => (c.p1DataIndex === partialAt ? [5, 4] : undefined) }
+            : {};
 
         // Recreate rather than mutate config.type — changing a chart's type at
         // runtime is unreliable in Chart.js v4.
@@ -620,8 +677,9 @@ export default (config = {}) => ({
                         // Ratios and net revenue are null where the month has
                         // no denominator; join across rather than break.
                         spanGaps: true,
+                        segment: partialSegment,
                     };
-                }),
+                }).concat(this.yoyDataset(data, split)),
             },
             options: {
                 responsive: true,
@@ -641,6 +699,35 @@ export default (config = {}) => ({
                 },
             },
         });
+    },
+
+    /**
+     * The same metric a year earlier, laid over this one.
+     *
+     * Built by shifting the series twelve buckets rather than by a second
+     * query: the trend already spans all the data. Only meaningful unsplit —
+     * six channels against six ghosts is unreadable.
+     */
+    yoyDataset(data, split) {
+        if (!this.trendYoY || split || this.granularity === 'custom') return [];
+
+        const values = data.values ?? [];
+        if (values.length <= 12) return [];
+
+        const shifted = values.map((_, i) => (i >= 12 ? values[i - 12] : null));
+
+        return [{
+            label: 'A year earlier',
+            data: shifted,
+            borderColor: '#cbd5e1',
+            backgroundColor: 'rgba(203, 213, 225, 0.25)',
+            borderWidth: 1.5,
+            borderDash: [4, 3],
+            fill: false,
+            tension: 0.3,
+            pointRadius: 0,
+            spanGaps: true,
+        }];
     },
 
     trendMetricLabel() {
@@ -768,7 +855,7 @@ export default (config = {}) => ({
     renderChartsFor(view) {
         this.$nextTick(() => {
             if (view === 'overview') this.fetchTrend().catch(() => {});
-            if (view === 'revenue') this.renderRevenueDonut();
+            if (view === 'revenue') { this.renderRevenueDonut(); this.renderMrrChart(); }
             if (view === 'subscribers' || view === 'retention') this.renderHistoryCharts();
         });
     },
@@ -806,6 +893,45 @@ export default (config = {}) => ({
         return this.historyRows().map((r) => (r.partial ? faded : solid));
     },
 
+    /**
+     * Trailing n-point mean, aligned to the input.
+     *
+     * At 50-75 sign-ups a month a single bad fortnight moves the rate by ten
+     * points, so the month-to-month line says more about sample size than
+     * about behaviour. The average is drawn over the raw line, never instead
+     * of it -- the real months stay visible.
+     */
+    rollingMean(values, window = 3) {
+        return values.map((_, i) => {
+            const slice = values.slice(Math.max(0, i - window + 1), i + 1).filter((v) => v !== null && v !== undefined);
+            if (slice.length < window) return null;   // no half-formed averages
+
+            return Math.round((slice.reduce((a, b) => a + b, 0) / slice.length) * 10) / 10;
+        });
+    },
+
+    /** The 3-month average drawn behind a rate line, when smoothing is on. */
+    smoothedDataset(label, values, color) {
+        return {
+            label: `${label} · 3-mo avg`,
+            data: this.rollingMean(values),
+            borderColor: color,
+            borderWidth: 3,
+            borderDash: [],
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0,
+            spanGaps: true,
+            order: 5,
+        };
+    },
+
+    toggleSmoothing() {
+        this.smoothRates = !this.smoothRates;
+        this.renderChurnRateChart();
+        this.renderNrrChart();
+    },
+
     /** Shared axis styling for the two percentage charts. */
     percentScales(beginAtZero) {
         return {
@@ -818,6 +944,70 @@ export default (config = {}) => ({
         this.renderGrowthChart();
         this.renderChurnRateChart();
         this.renderNrrChart();
+        this.renderMrrChart();
+    },
+
+    /**
+     * Recurring revenue month by month, with what one subscriber pays beside
+     * it. MRR is those two multiplied together, so plotting only the total
+     * leaves "we grew" and "we put prices up" looking identical.
+     */
+    renderMrrChart() {
+        const ctx = this.$refs.mrrCanvas;
+        const rows = this.historyRows();
+        if (!ctx || !rows.length) return;
+
+        if (this.mrrChart) this.mrrChart.destroy();
+        this.mrrChart = new window.Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: this.historyLabels(),
+                datasets: [
+                    {
+                        label: 'MRR',
+                        data: rows.map((r) => r.mrr),
+                        borderColor: '#61bac0',
+                        backgroundColor: 'rgba(97, 186, 192, 0.18)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 2,
+                        spanGaps: true,
+                        segment: this.partialSegment(),
+                    },
+                    {
+                        label: 'Per subscriber',
+                        data: rows.map((r) => r.arpu),
+                        yAxisID: 'per',
+                        borderColor: '#e4b450',
+                        borderWidth: 1.5,
+                        fill: false,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        spanGaps: true,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: true, labels: { boxWidth: 10, usePointStyle: true } },
+                    tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${this.money(c.parsed.y)}` } },
+                },
+                scales: {
+                    x: { grid: { display: false } },
+                    y: { beginAtZero: true, ticks: { callback: (v) => this.axisLabel(v, 'currency') } },
+                    per: {
+                        position: 'right',
+                        beginAtZero: true,
+                        grid: { display: false },
+                        ticks: { callback: (v) => this.axisLabel(v, 'currency') },
+                    },
+                },
+            },
+        });
     },
 
     /**
@@ -925,7 +1115,9 @@ export default (config = {}) => ({
                         pointRadius: 0,
                         spanGaps: true,
                     },
-                ],
+                ].concat(this.smoothRates
+                    ? [this.smoothedDataset('Real churn', rows.map((r) => r.churn_net), 'rgba(162, 62, 88, 0.45)')]
+                    : []),
             },
             options: {
                 responsive: true,
@@ -973,7 +1165,9 @@ export default (config = {}) => ({
                         fill: false,
                         pointRadius: 0,
                     },
-                ],
+                ].concat(this.smoothRates
+                    ? [this.smoothedDataset('NRR', rows.map((r) => r.nrr), 'rgba(74, 154, 160, 0.5)')]
+                    : []),
             },
             options: {
                 responsive: true,

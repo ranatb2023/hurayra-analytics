@@ -243,7 +243,7 @@ class RevenueRetentionTest extends TestCase
         $this->assertSame(['2026-03', '2026-04', '2026-05', '2026-06'], array_column($rows, 'month'));
     }
 
-    public function test_sparklines_endpoint_carries_the_computed_series(): void
+    public function test_sparklines_endpoint_carries_only_the_row_bucketed_series(): void
     {
         $this->sub(1, 'active', '2026-01-01 00:00:00');
         $this->order(100, 1, '2026-04-01 00:00:00', 20.0);
@@ -252,13 +252,41 @@ class RevenueRetentionTest extends TestCase
 
         $res = $this->getJson('/api/metrics/sparklines?granularity=month')->assertOk();
 
-        $res->assertJsonStructure(['new_subscribers', 'completed', 'total_revenue',
-            'monthly_churn_rate_net', 'net_revenue_retention']);
+        $res->assertJsonStructure(['new_subscribers', 'completed', 'total_revenue']);
 
-        // Nulls would break the SVG path, so they must never reach the client.
-        foreach ($res->json('net_revenue_retention') as $v) {
-            $this->assertNotNull($v);
-        }
+        // Churn, retention and MRR are month-walked, and /history already walks
+        // them. Serving them here too made every page load pay for the whole
+        // subscription book a second time.
+        $this->assertArrayNotHasKey('monthly_churn_rate_net', $res->json());
+        $this->assertArrayNotHasKey('net_revenue_retention', $res->json());
+    }
+
+    public function test_the_history_endpoint_carries_what_the_sparklines_stopped_serving(): void
+    {
+        $this->sub(1, 'active', '2026-01-01 00:00:00');
+        $this->order(100, 1, '2026-04-01 00:00:00', 20.0);
+        $this->sub(2, 'cancelled', '2026-01-01 00:00:00', '2026-06-15 00:00:00');
+        $this->order(101, 2, '2026-04-01 00:00:00', 20.0);
+
+        $this->getJson('/api/metrics/history?months=6')
+            ->assertOk()
+            ->assertJsonStructure(['rows' => [['month', 'churn_net', 'nrr', 'mrr', 'arpu', 'paying']]]);
+    }
+
+    public function test_a_sparkline_leaves_out_the_month_still_filling_up(): void
+    {
+        // The newest row is 4 June, so June is partial and must not be the
+        // point the card's line ends on.
+        $this->sub(1, 'active', '2026-04-01 00:00:00');
+        $this->order(100, 1, '2026-05-02 00:00:00', 20.0);
+        $this->order(101, 1, '2026-06-04 00:00:00', 20.0);
+
+        $completed = $this->getJson('/api/metrics/sparklines?granularity=month')
+            ->assertOk()
+            ->json('completed');
+
+        // May's single order only; June's is dropped as an unfinished month.
+        $this->assertSame([1], $completed);
     }
 
     // ------------------------------------------------------------ cohort value
