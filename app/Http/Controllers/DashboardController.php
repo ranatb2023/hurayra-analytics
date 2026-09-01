@@ -13,8 +13,16 @@ class DashboardController extends Controller
 
     public function index(): View
     {
+        // The filter bar opens here. Anchored on the newest row rather than on
+        // today, because an export is always a little behind the wall clock and
+        // a dashboard that opens on a month the data has not reached yet shows
+        // zeros in every period metric -- which looks like a failed import.
+        $latest = $this->metrics->latestDataInstant();
+
         return view('dashboard.index', [
             'hasData' => Record::query()->exists(),
+            'defaultYear' => $latest->year,
+            'defaultMonth' => $latest->month,
             'trendMetrics' => collect($this->metrics->trendMetrics())
                 ->map(fn ($spec, $key) => ['key' => $key, 'label' => $spec['label']])
                 ->values(),

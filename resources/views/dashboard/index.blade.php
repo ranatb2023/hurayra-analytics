@@ -143,7 +143,7 @@
 {{-- Block form, not @section(name, value): the inline form compiles its second
      argument as a PHP string, so the {{ }} echoes inside it never run. Js::from
      escapes for an HTML attribute, so this is safe inside x-data="…". --}}
-@section('app_data')dashboard({ defaultYear: {{ (int) $years[0] }}, trendMetrics: {{ \Illuminate\Support\Js::from($trendMetrics) }}, segmentDimensions: {{ \Illuminate\Support\Js::from($segmentDimensions) }}, years: {{ \Illuminate\Support\Js::from($years) }}, directions: {{ \Illuminate\Support\Js::from($directions) }} })@endsection
+@section('app_data')dashboard({ defaultYear: {{ (int) $defaultYear }}, defaultMonth: {{ (int) $defaultMonth }}, trendMetrics: {{ \Illuminate\Support\Js::from($trendMetrics) }}, segmentDimensions: {{ \Illuminate\Support\Js::from($segmentDimensions) }}, years: {{ \Illuminate\Support\Js::from($years) }}, directions: {{ \Illuminate\Support\Js::from($directions) }} })@endsection
 
 @section('topbar')
     <div class="min-w-0 flex-1">

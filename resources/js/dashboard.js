@@ -7,8 +7,11 @@
 export default (config = {}) => ({
     // --- filter state ---
     granularity: 'month',
+    // Both come from the newest row in the data, not the wall clock. An export
+    // is always a little behind today, and opening on a month the data has not
+    // reached yet shows a zero in every period card.
     year: config.defaultYear ?? new Date().getFullYear(),
-    month: new Date().getMonth() + 1,
+    month: config.defaultMonth ?? new Date().getMonth() + 1,
     week: 1, // week-of-month index
     from: '',
     to: '',
