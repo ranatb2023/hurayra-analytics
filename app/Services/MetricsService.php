@@ -885,12 +885,8 @@ class MetricsService
      * Every month walk anchors here rather than on "now", so a dataset that
      * stops in June does not trail empty months -- and the month this instant
      * falls inside is the one that is still filling up.
-     *
-     * Public because the dashboard's opening filter has to agree with it: a
-     * filter defaulted to the wall-clock month opens on an empty period the
-     * moment the export is a month behind, which reads as a broken import.
      */
-    public function latestDataInstant(): CarbonImmutable
+    private function latestDataInstant(): CarbonImmutable
     {
         $latest = (string) DB::table('records')->max('date_created_gmt');
 
