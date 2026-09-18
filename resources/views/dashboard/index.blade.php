@@ -1049,7 +1049,7 @@
         <div class="no-print flex flex-wrap items-center gap-4 border-b border-slate-100 p-4">
             <div class="relative min-w-56 flex-1">
                 <svg class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
-                <input type="search" x-model="upsellSearch" placeholder="Search email, customer or subscription ID…"
+                <input type="search" x-model="upsellSearch" placeholder="Search email, source, customer or subscription ID…"
                        class="w-full rounded-lg border-slate-300 py-1.5 pl-9 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
             </div>
             <label class="inline-flex cursor-pointer items-center gap-2.5 text-sm font-medium text-slate-600">
@@ -1077,6 +1077,7 @@
                     <tr>
                         <th class="px-5 py-2.5">Customer</th>
                         <th class="px-3 py-2.5">One-time order</th>
+                        <th class="px-3 py-2.5">Source</th>
                         <th class="px-3 py-2.5 text-right">Orders</th>
                         <th class="px-3 py-2.5 text-right">One-time spend</th>
                         <th class="px-3 py-2.5">Subscribed on</th>
@@ -1102,6 +1103,11 @@
                                 </div>
                             </td>
                             <td class="whitespace-nowrap px-3 py-2.5 text-slate-600" x-text="dateLabel(c.first_one_time_at)"></td>
+                            <td class="max-w-[150px] px-3 py-2.5">
+                                <p class="truncate text-slate-600" x-text="c.one_time_source || '—'"></p>
+                                <p class="truncate text-[11px] text-slate-400" x-show="upsellSourceDetail(c)"
+                                   x-text="upsellSourceDetail(c)"></p>
+                            </td>
                             <td class="px-3 py-2.5 text-right tabular-nums text-slate-600" x-text="c.one_time_orders"></td>
                             <td class="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-600" x-text="money(c.one_time_spend)"></td>
                             <td class="whitespace-nowrap px-3 py-2.5 font-medium text-slate-700" x-text="dateLabel(c.subscribed_at)"></td>
@@ -1115,7 +1121,7 @@
                     </template>
                     <template x-if="!upsellLoading && !upsellError && upsellMatches().length === 0">
                         <tr>
-                            <td colspan="8" class="px-5 py-8 text-center text-sm text-slate-400">
+                            <td colspan="9" class="px-5 py-8 text-center text-sm text-slate-400">
                                 No customer bought a one-time product and then subscribed
                                 <span x-show="upsellSearch">matching “<span x-text="upsellSearch"></span>”</span>.
                             </td>

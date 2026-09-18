@@ -532,14 +532,28 @@ export default (config = {}) => ({
         return `/api/metrics/one-time-to-subscription/export?${this.upsellParams().toString()}`;
     },
 
-    /** Search-filtered rows (email / customer id / subscription id). */
+    /** Search-filtered rows (email / source / customer id / subscription id). */
     upsellMatches() {
         const q = this.upsellSearch.trim().toLowerCase();
         if (!q) return this.upsell.rows;
         return this.upsell.rows.filter((r) =>
             (r.email ?? '').toLowerCase().includes(q)
+            || (r.one_time_source ?? '').toLowerCase().includes(q)
+            || (r.one_time_campaign ?? '').toLowerCase().includes(q)
             || String(r.customer_id ?? '').includes(q)
             || String(r.subscription_id ?? '').includes(q));
+    },
+
+    /**
+     * The medium / campaign / attribution bucket shown under the source.
+     * Anything that merely repeats the source itself is dropped, so a row
+     * reading "google" does not get a second line reading "google".
+     */
+    upsellSourceDetail(c) {
+        const source = (c.one_time_source ?? '').toLowerCase();
+        const parts = [c.one_time_medium, c.one_time_campaign, c.one_time_attribution]
+            .filter((v) => v && v.toLowerCase() !== source);
+        return [...new Set(parts)].join(' · ');
     },
 
     upsellVisible() {

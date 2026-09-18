@@ -105,7 +105,8 @@ class MetricsController extends Controller
         return response()->streamDownload(function () use ($data) {
             $out = fopen('php://output', 'w');
             fputcsv($out, [
-                'Customer', 'Customer ID', 'First one-time order', 'Last one-time order',
+                'Customer', 'Customer ID', 'First one-time order', 'Source', 'Medium', 'Campaign',
+                'Attribution type', 'Last one-time order',
                 'One-time orders', 'One-time spend (completed)', 'Subscribed on', 'Days to convert',
                 'Subscription ID', 'Subscription status', 'Subscriptions', 'Subscription orders',
                 'Subscription spend (completed)', 'Subscription after one-time',
@@ -116,6 +117,10 @@ class MetricsController extends Controller
                     $c['email'] ?? ('Customer #'.$c['customer_id']),
                     $c['customer_id'],
                     $c['first_one_time_at'],
+                    $c['one_time_source'] ?? '',
+                    $c['one_time_medium'] ?? '',
+                    $c['one_time_campaign'] ?? '',
+                    $c['one_time_attribution'] ?? '',
                     $c['last_one_time_at'],
                     $c['one_time_orders'],
                     $c['one_time_spend'],

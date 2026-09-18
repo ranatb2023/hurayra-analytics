@@ -104,6 +104,72 @@ class OneTimeToSubscriptionTest extends TestCase
         $this->assertSame(30, $e['days_to_convert']);
     }
 
+    public function test_source_comes_from_the_first_one_time_order(): void
+    {
+        // Two one-time orders from different channels. The list shows the first
+        // order's date, so it must show that order's source - "google" in April
+        // is the alphabetically later value an aggregate would have picked.
+        $this->record(20, ['record_type' => 'shop_order', 'order_relationship' => 'one_time', 'status' => 'completed',
+            'date_created_gmt' => '2026-01-10 00:00:00', 'billing_email' => 'g@example.com', 'customer_id' => 20,
+            'total_amount' => 40, 'utm_source' => 'facebook', 'utm_medium' => 'cpc', 'utm_campaign' => 'spring',
+            'attribution_type' => 'utm']);
+        $this->record(21, ['record_type' => 'shop_order', 'order_relationship' => 'one_time', 'status' => 'completed',
+            'date_created_gmt' => '2026-04-10 00:00:00', 'billing_email' => 'g@example.com', 'customer_id' => 20,
+            'total_amount' => 40, 'utm_source' => 'google', 'utm_medium' => 'organic', 'attribution_type' => 'organic']);
+        $this->record(22, ['record_type' => 'shop_subscription', 'status' => 'active',
+            'date_created_gmt' => '2026-05-01 00:00:00', 'billing_email' => 'g@example.com', 'customer_id' => 20]);
+
+        $g = collect($this->metrics->oneTimeToSubscription()['customers'])->firstWhere('key', 'g@example.com');
+
+        $this->assertSame('facebook', $g['one_time_source']);
+        $this->assertSame('cpc', $g['one_time_medium']);
+        $this->assertSame('spring', $g['one_time_campaign']);
+        $this->assertSame('utm', $g['one_time_attribution']);
+    }
+
+    public function test_source_falls_back_to_the_attribution_bucket_and_then_to_null(): void
+    {
+        // No UTMs captured - WooCommerce's coarser bucket is all there is.
+        $this->record(30, ['record_type' => 'shop_order', 'order_relationship' => 'one_time', 'status' => 'completed',
+            'date_created_gmt' => '2026-01-10 00:00:00', 'billing_email' => 'h@example.com', 'customer_id' => 30,
+            'total_amount' => 40, 'attribution_type' => 'admin']);
+        $this->record(31, ['record_type' => 'shop_subscription', 'status' => 'active',
+            'date_created_gmt' => '2026-02-01 00:00:00', 'billing_email' => 'h@example.com', 'customer_id' => 30]);
+
+        // Nothing at all - null, which is not the same fact as "(direct)".
+        $this->record(32, ['record_type' => 'shop_order', 'order_relationship' => 'one_time', 'status' => 'completed',
+            'date_created_gmt' => '2026-01-10 00:00:00', 'billing_email' => 'i@example.com', 'customer_id' => 31,
+            'total_amount' => 40]);
+        $this->record(33, ['record_type' => 'shop_subscription', 'status' => 'active',
+            'date_created_gmt' => '2026-02-01 00:00:00', 'billing_email' => 'i@example.com', 'customer_id' => 31]);
+
+        $rows = collect($this->metrics->oneTimeToSubscription()['customers']);
+
+        $this->assertSame('admin', $rows->firstWhere('key', 'h@example.com')['one_time_source']);
+        $this->assertNull($rows->firstWhere('key', 'i@example.com')['one_time_source']);
+    }
+
+    public function test_completed_only_moves_the_source_to_the_first_paid_order(): void
+    {
+        // The first order failed. With the switch on, the list's first-order
+        // date moves to the completed one - and so must its source.
+        $this->record(40, ['record_type' => 'shop_order', 'order_relationship' => 'one_time', 'status' => 'failed',
+            'date_created_gmt' => '2026-01-10 00:00:00', 'billing_email' => 'j@example.com', 'customer_id' => 40,
+            'total_amount' => 40, 'utm_source' => 'facebook']);
+        $this->record(41, ['record_type' => 'shop_order', 'order_relationship' => 'one_time', 'status' => 'completed',
+            'date_created_gmt' => '2026-02-10 00:00:00', 'billing_email' => 'j@example.com', 'customer_id' => 40,
+            'total_amount' => 40, 'utm_source' => 'newsletter']);
+        $this->record(42, ['record_type' => 'shop_subscription', 'status' => 'active',
+            'date_created_gmt' => '2026-03-01 00:00:00', 'billing_email' => 'j@example.com', 'customer_id' => 40]);
+
+        $all = collect($this->metrics->oneTimeToSubscription()['customers'])->firstWhere('key', 'j@example.com');
+        $this->assertSame('facebook', $all['one_time_source']);
+
+        $paid = collect($this->metrics->oneTimeToSubscription(completedOnly: true)['customers'])
+            ->firstWhere('key', 'j@example.com');
+        $this->assertSame('newsletter', $paid['one_time_source']);
+    }
+
     public function test_summary_counts_every_one_time_buyer(): void
     {
         $this->seedJourneys();

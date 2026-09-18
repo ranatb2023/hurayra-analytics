@@ -1677,6 +1677,23 @@ class MetricsService
             ->get()
             ->keyBy('ckey');
 
+        // How the FIRST one-time order was acquired — the order whose date the
+        // list shows. An aggregate cannot answer this: MAX(utm_source) is the
+        // alphabetically last source the customer ever used, not the one that
+        // brought them in. So the rows are read oldest-first and the first of
+        // each bucket is kept.
+        $firstOneTimeOrder = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('order_relationship', 'one_time')
+            ->whereNotNull('date_created_gmt')
+            ->whereRaw("({$key}) IS NOT NULL")
+            ->when($completedOnly, fn (Builder $q) => $q->where('status', 'completed'))
+            ->selectRaw("{$key} as ckey, utm_source, utm_medium, utm_campaign, attribution_type")
+            ->orderBy('date_created_gmt')
+            ->get()
+            ->groupBy('ckey')
+            ->map(fn ($orders) => $orders->first());
+
         // Every subscription row, oldest first, bucketed per customer — we need
         // the individual sign-up dates, not an aggregate, to pick the first
         // subscription that follows the one-time order.
@@ -1745,12 +1762,17 @@ class MetricsService
             }
 
             $revenue = $subRevenue[$ckey] ?? null;
+            $origin = $firstOneTimeOrder[$ckey] ?? null;
 
             $rows[] = [
                 'key' => (string) $ckey,
                 'email' => $ot->email ?: ($sub->billing_email ?: null),
                 'customer_id' => (int) $ot->customer_id ?: null,
                 'first_one_time_at' => $firstOneTime,
+                'one_time_source' => $this->attributionLabel($origin),
+                'one_time_medium' => $this->cleanAttribute($origin?->utm_medium),
+                'one_time_campaign' => $this->cleanAttribute($origin?->utm_campaign),
+                'one_time_attribution' => $this->cleanAttribute($origin?->attribution_type),
                 'last_one_time_at' => (string) $ot->last_at,
                 'one_time_orders' => (int) $ot->orders,
                 'one_time_spend' => round((float) $ot->spend, 2),
@@ -1785,6 +1807,35 @@ class MetricsService
             'summary' => $summary,
             'total' => count($rows),
         ];
+    }
+
+    /**
+     * How an order was acquired, as the one label a human would name.
+     *
+     * `utm_source` is the recognisable channel ("google", "(direct)");
+     * `attribution_type` is WooCommerce's coarser bucket ("organic",
+     * "referral", "admin") and is often the only thing present when no UTMs
+     * were captured, so it stands in rather than leaving the row blank.
+     *
+     * Null means the order carried no attribution at all — a different fact
+     * from "(direct)", which positively states there was no referrer.
+     */
+    private function attributionLabel(?object $order): ?string
+    {
+        if ($order === null) {
+            return null;
+        }
+
+        return $this->cleanAttribute($order->utm_source)
+            ?? $this->cleanAttribute($order->attribution_type);
+    }
+
+    /** An attribution column, with empty strings treated as absent. */
+    private function cleanAttribute(mixed $value): ?string
+    {
+        $value = trim((string) ($value ?? ''));
+
+        return $value === '' ? null : $value;
     }
 
     private function monthDiff(string $from, string $to): int
