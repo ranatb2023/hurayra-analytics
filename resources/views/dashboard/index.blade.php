@@ -696,7 +696,7 @@
                         <th class="px-5 py-2.5 text-right">Active at start</th>
                         <th class="px-5 py-2.5 text-right">New</th>
                         <th class="px-5 py-2.5 text-right">Churned</th>
-                        <th class="px-5 py-2.5 text-right">On hold</th>
+                        <th class="px-5 py-2.5 text-right" title="Moved to On Hold or Pending Cancellation this month, net of those that came back. Not churn.">On hold / pending</th>
                         <th class="px-5 py-2.5 text-right">Active at end</th>
                         <th class="px-5 py-2.5 text-right">Net</th>
                         <th class="px-5 py-2.5 text-right">Churn rate</th>

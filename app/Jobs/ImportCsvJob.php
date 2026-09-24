@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Import;
 use App\Services\CsvImportService;
+use App\Services\StatusHistoryImportService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Storage;
@@ -19,11 +20,17 @@ class ImportCsvJob implements ShouldQueue
     {
     }
 
-    public function handle(CsvImportService $service): void
+    public function handle(CsvImportService $service, StatusHistoryImportService $history): void
     {
         $import = Import::findOrFail($this->importId);
 
         $absolutePath = Storage::disk('local')->path($import->stored_path);
+
+        if ($history->isHistoryHeader($service->readHeader($absolutePath))) {
+            $history->import($import, $absolutePath);
+
+            return;
+        }
 
         $service->import($import, $absolutePath);
     }

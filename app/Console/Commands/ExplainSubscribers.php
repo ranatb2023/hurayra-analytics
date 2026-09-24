@@ -101,14 +101,19 @@ class ExplainSubscribers extends Command
             ->selectRaw('subscription_id, MAX(date_created_gmt) as last_order_at, COUNT(*) as orders')
             ->groupBy('subscription_id');
 
-        $holds = app(MetricsService::class)->holdStarts();
+        $metrics = app(MetricsService::class);
+        $holds = $metrics->holdStarts();
+        $timelines = $metrics->statusTimelines();
 
         return DB::table('records as s')
             ->leftJoinSub($lastOrder, 'lo', 'lo.subscription_id', '=', 's.id')
             ->where('s.record_type', 'shop_subscription')
             ->selectRaw('s.id, s.status, s.customer_id, s.billing_email, s.date_created_gmt as created, s.ended_at, lo.last_order_at, lo.orders')
             ->get()
-            ->map(fn ($r) => (array) $r + ['held' => $holds[(int) $r->id]['held'] ?? null])
+            ->map(fn ($r) => (array) $r + [
+                'held' => $holds[(int) $r->id]['held'] ?? null,
+                'timeline' => $timelines[(int) $r->id] ?? [],
+            ])
             ->all();
     }
 
@@ -129,6 +134,14 @@ class ExplainSubscribers extends Command
 
         if ((string) $s['created'] >= $t) {
             return ['excluded', 'signed up on/after this date'];
+        }
+
+        $known = app(MetricsService::class)->statusFromTimeline($s['timeline'], $t);
+
+        if ($known !== null) {
+            return $known === 'active'
+                ? ['included', 'status "active" on this date, per the imported status history']
+                : ['excluded', 'status "'.$known.'" on this date, per the imported status history'];
         }
 
         if ((string) $s['status'] === 'active') {
@@ -242,6 +255,9 @@ class ExplainSubscribers extends Command
         $anyPoint = count(array_filter($subs, function ($s) use ($startS, $endS) {
             if ($s['created'] === null || (string) $s['created'] >= $endS) {
                 return false;
+            }
+            if ($s['timeline'] !== []) {
+                return $this->classify($s, $startS)[0] === 'included' || $this->classify($s, $endS)[0] === 'included';
             }
             if ((string) $s['status'] === 'active') {
                 return true;

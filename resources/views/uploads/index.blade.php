@@ -65,6 +65,12 @@
                 <span class="font-mono text-slate-500">primary_product</span>.
                 Use <span class="font-mono text-slate-500">03-export-with-attribution.sql</span> to include them.
             </p>
+            <h2 class="mt-4 text-xs font-bold uppercase tracking-wider text-slate-500">Status history (optional second file)</h2>
+            <code class="mt-2 block wrap-break-word text-xs leading-relaxed text-slate-600">subscription_id, changed_at, note</code>
+            <p class="mt-2 text-xs text-slate-400">
+                Export with <span class="font-mono text-slate-500">05-export-status-history.sql</span> and upload it here too.
+                It gives past months real On Hold, Pending Cancellation and Pending counts, which the orders file cannot.
+            </p>
         </div>
     </div>
 

@@ -5,15 +5,19 @@ namespace App\Http\Controllers;
 use App\Jobs\ImportCsvJob;
 use App\Models\Import;
 use App\Services\CsvImportService;
+use App\Services\StatusHistoryImportService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
 
 class UploadController extends Controller
 {
-    public function __construct(private readonly CsvImportService $csv)
-    {
+    public function __construct(
+        private readonly CsvImportService $csv,
+        private readonly StatusHistoryImportService $history,
+    ) {
     }
 
     /** Upload screen + history of past imports. */
@@ -40,7 +44,9 @@ class UploadController extends Controller
         $header = $this->csv->readHeader($uploaded->getRealPath());
         $check = $this->csv->validateHeader($header);
 
-        if (! $check['valid']) {
+        // The status history file (05-export-status-history.sql) is the other
+        // accepted format; the job tells the two apart the same way.
+        if (! $check['valid'] && ! $this->history->isHistoryHeader($header)) {
             return back()->withErrors([
                 'file' => $this->headerErrorMessage($check),
             ]);
@@ -70,6 +76,7 @@ class UploadController extends Controller
 
         // Records cascade via the FK's nullOnDelete? No — explicitly remove them.
         $import->records()->delete();
+        DB::table('subscription_status_changes')->where('import_id', $import->id)->delete();
         $import->delete();
 
         return back()->with('status', 'Import batch deleted.');
@@ -78,6 +85,7 @@ class UploadController extends Controller
     private function headerErrorMessage(array $check): string
     {
         return 'CSV is missing required column(s): '.implode(', ', $check['missing'])
-            .'. Required: '.implode(', ', CsvImportService::EXPECTED_COLUMNS).'.';
+            .'. Required: '.implode(', ', CsvImportService::EXPECTED_COLUMNS).'.'
+            .' (A status history file needs subscription_id, changed_at and note instead.)';
     }
 }
