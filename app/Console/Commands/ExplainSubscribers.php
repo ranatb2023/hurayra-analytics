@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Record;
+use App\Services\MetricsService;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -100,12 +101,14 @@ class ExplainSubscribers extends Command
             ->selectRaw('subscription_id, MAX(date_created_gmt) as last_order_at, COUNT(*) as orders')
             ->groupBy('subscription_id');
 
+        $holds = app(MetricsService::class)->holdStarts();
+
         return DB::table('records as s')
             ->leftJoinSub($lastOrder, 'lo', 'lo.subscription_id', '=', 's.id')
             ->where('s.record_type', 'shop_subscription')
             ->selectRaw('s.id, s.status, s.customer_id, s.billing_email, s.date_created_gmt as created, s.ended_at, lo.last_order_at, lo.orders')
             ->get()
-            ->map(fn ($r) => (array) $r)
+            ->map(fn ($r) => (array) $r + ['held' => $holds[(int) $r->id]['held'] ?? null])
             ->all();
     }
 
@@ -130,6 +133,12 @@ class ExplainSubscribers extends Command
 
         if ((string) $s['status'] === 'active') {
             return ['included', 'status "active" (still running today)'];
+        }
+
+        if ($s['held'] !== null) {
+            return (string) $s['held'] >= $t
+                ? ['included', 'on hold now, but went on hold later (estimated from its last payment)']
+                : ['excluded', 'already on hold by this date (estimated from its last payment)'];
         }
 
         if (! $terminal) {
@@ -193,7 +202,10 @@ class ExplainSubscribers extends Command
             [
                 ['active only (what the dashboard shows)', $this->mark($counted, $target)],
                 ['+ pending-cancel (cancelling, but still a subscriber)', $this->mark($counted + $withStatus(['pending-cancel']), $target)],
-                ['+ pending-cancel + on-hold', $this->mark($counted + $withStatus(['pending-cancel', 'on-hold']), $target)],
+                ['+ pending-cancel + every on-hold (whenever it paused)', $this->mark($counted + $withStatus(['pending-cancel']) + count(array_filter(
+                    $started,
+                    fn ($s) => $s['held'] !== null && (string) $s['held'] < $t,
+                )), $target)],
                 ['every subscription that had started and not yet ended', $this->mark($this->startedNotEndedAt($subs, $t), $target)],
                 ['every subscription that had started, whatever its state', $this->mark(count($started), $target)],
             ],
@@ -233,6 +245,9 @@ class ExplainSubscribers extends Command
             }
             if ((string) $s['status'] === 'active') {
                 return true;
+            }
+            if ($s['held'] !== null) {
+                return (string) $s['held'] >= $startS;
             }
             if (! in_array((string) $s['status'], Record::TERMINAL_SUBSCRIPTION_STATUSES, true)) {
                 return false;

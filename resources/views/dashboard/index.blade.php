@@ -42,7 +42,7 @@
         'churned_in_period' => $M('Subscribers Lost', $icons['x_circle'], 1, 'bad', "'ended during this period'",
             'Every subscription whose end date falls inside this period, whenever it signed up. This is the churn numerator.'),
         'subscribers_active' => $M('Active Subscribers', $icons['users'], 1, 'good', 'periodEndNote()',
-            'Status active at a single instant — the period end. On Hold and Pending Cancellation are separate states and are not included. Run php artisan subs:explain {YYYY-MM} to reconcile against another report.'),
+            'Status active at a single instant — the period end. A subscription now On Hold still counts as active in the months before it went on hold (estimated as one billing cycle after its last payment). Pending Cancellation is a separate state and is not included. Run php artisan subs:explain {YYYY-MM} to reconcile against another report.'),
     ];
     $stateChips = [
         'on_hold' => $M('On Hold', $icons['pause'], 2, 'bad', 'onHoldNote()',
@@ -696,6 +696,7 @@
                         <th class="px-5 py-2.5 text-right">Active at start</th>
                         <th class="px-5 py-2.5 text-right">New</th>
                         <th class="px-5 py-2.5 text-right">Churned</th>
+                        <th class="px-5 py-2.5 text-right">On hold</th>
                         <th class="px-5 py-2.5 text-right">Active at end</th>
                         <th class="px-5 py-2.5 text-right">Net</th>
                         <th class="px-5 py-2.5 text-right">Churn rate</th>
@@ -715,6 +716,7 @@
                             <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="row.active_start"></td>
                             <td class="px-5 py-2.5 text-right tabular-nums font-semibold text-emerald-600" x-text="row.new"></td>
                             <td class="px-5 py-2.5 text-right tabular-nums font-semibold text-rose-600" x-text="row.churned"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums text-amber-600" x-text="row.paused ?? 0"></td>
                             <td class="px-5 py-2.5 text-right tabular-nums font-semibold text-slate-900" x-text="row.active_end"></td>
                             <td class="px-5 py-2.5 text-right tabular-nums"
                                 :class="row.active_end - row.active_start < 0 ? 'text-rose-600' : 'text-emerald-600'"

@@ -168,6 +168,59 @@ class SubscriberHistoryTest extends TestCase
         $this->assertSame(1, $after['2026-07']['churned']);
     }
 
+    /** A monthly subscription, now on hold, whose last payment was $lastPaid. */
+    private function onHoldPaidUntil(int $id, string $lastPaid): void
+    {
+        $this->record($id, [
+            'record_type' => 'shop_subscription', 'status' => 'on-hold',
+            'date_created_gmt' => '2026-02-01 00:00:00', 'billing_period' => 'month', 'billing_interval' => 1,
+        ]);
+        $this->record($id + 100, [
+            'record_type' => 'shop_order', 'order_relationship' => 'renewal', 'status' => 'completed',
+            'date_created_gmt' => $lastPaid, 'subscription_id' => $id, 'total_amount' => 10,
+        ]);
+    }
+
+    public function test_a_subscriber_who_goes_on_hold_later_stays_active_in_earlier_months(): void
+    {
+        $may = $this->month(2026, 5);
+        $june = $this->month(2026, 6);
+
+        // Paid 10 May, so the next renewal fell due - and the hold began - on 9 June.
+        $this->onHoldPaidUntil(7, '2026-05-10 00:00:00');
+
+        $this->assertSame($may['subscribers_active'] + 1, $this->month(2026, 5)['subscribers_active']);
+        $this->assertSame($may['on_hold'], $this->month(2026, 5)['on_hold']);
+
+        $this->assertSame($june['subscribers_active'], $this->month(2026, 6)['subscribers_active']);
+        $this->assertSame($june['on_hold'] + 1, $this->month(2026, 6)['on_hold']);
+    }
+
+    public function test_the_month_walk_reports_subscribers_going_on_hold(): void
+    {
+        $this->onHoldPaidUntil(7, '2026-05-10 00:00:00');
+
+        $rows = collect($this->metrics->churnSeries(6)['rows'])->keyBy('month');
+
+        $this->assertSame(1, $rows['2026-06']['paused']);
+        $this->assertSame(1, $rows['2026-06']['churned']); // S2 only; a hold is not churn
+        $this->assertSame(
+            $rows['2026-06']['active_start'] + $rows['2026-06']['new'] - $rows['2026-06']['churned'] - $rows['2026-06']['paused'],
+            $rows['2026-06']['active_end'],
+        );
+    }
+
+    public function test_a_hold_is_never_dated_past_the_newest_data(): void
+    {
+        // Paid 1 July; the next renewal (31 July) is after the data stops on
+        // 4 July, yet the subscription is on hold now, so July must show it.
+        $this->onHoldPaidUntil(7, '2026-07-01 00:00:00');
+
+        $this->assertSame(1, $this->month(2026, 7)['subscribers_active']); // S1 only
+        $this->assertSame(2, $this->month(2026, 7)['on_hold']);            // S4 + S7
+        $this->assertSame(2, $this->month(2026, 6)['subscribers_active']); // S1 + S7
+    }
+
     public function test_end_date_coverage_reports_how_much_timing_is_imported(): void
     {
         // Of the three cancelled subs, two carry a real ended_at.

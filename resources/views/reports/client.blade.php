@@ -86,8 +86,8 @@
 
         <p class="mb-6 text-[11px] text-slate-400">
             Active Subscribers counts status <span class="font-mono">active</span> as of
-            {{ $period->end->subDay()->format('M j, Y') }}. On Hold and Pending Cancellation are separate
-            states and are not included in it.
+            {{ $period->end->subDay()->format('M j, Y') }}. Subscriptions on hold by that date and Pending
+            Cancellation are not included; one that went on hold later still counts here.
         </p>
 
         {{-- Retention & churn --}}

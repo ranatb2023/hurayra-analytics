@@ -37,8 +37,13 @@ use Illuminate\Support\Facades\DB;
  * last point we can prove it was still being billed. Under this rule a customer
  * who was active in March and cancelled in June stays in March's count forever.
  *
- * `on-hold`, `pending` and `pending-cancel` are live states with no history in
- * the source data, so they are still read as-is and keep their own cards. A
+ * `on-hold` carries no date either, but reading it as-is pulls everyone who
+ * pauses this month out of every earlier month. Its start is estimated instead
+ * ({@see holdStarts()}): until then the subscription counts as active, after
+ * it as on hold.
+ *
+ * `pending` and `pending-cancel` are live states with no history in the
+ * source data, so they are still read as-is and keep their own cards. A
  * subscription sitting in `pending-cancel` today has not cancelled yet, so once
  * it does cancel it correctly appears as active in the months before its end.
  *
@@ -647,21 +652,24 @@ class MetricsService
      * the same answer for March that it gives today.
      *
      * @param  int  $months  how many trailing months to return (1–60)
-     * @return array{rows: array<int, array{month:string, active_start:int, new:int, churned:int, active_end:int, churn_rate:?float, partial:bool}>, end_date_coverage: ?float}
+     * @return array{rows: array<int, array{month:string, active_start:int, new:int, churned:int, paused:int, active_end:int, churn_rate:?float, partial:bool}>, end_date_coverage: ?float}
      */
     public function churnSeries(int $months = self::CHURN_SERIES_MONTHS): array
     {
         $months = max(1, min(60, $months));
 
+        $holds = $this->holdStarts();
+
         $subs = $this->subscriptionLifecycle()
             ->whereNotNull('s.date_created_gmt')
-            ->selectRaw('s.status, s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended')
+            ->selectRaw('s.id, s.status, s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended')
             ->get()
             ->map(fn ($r) => [
                 'created' => (string) $r->created,
                 'ended' => $r->ended === null ? null : (string) $r->ended,
                 'terminal' => in_array((string) $r->status, self::TERMINAL, true),
                 'active' => (string) $r->status === 'active',
+                'held' => $holds[(int) $r->id]['held'] ?? null,
             ])
             ->all();
 
@@ -684,6 +692,7 @@ class MetricsService
             $activeEnd = 0;
             $joined = 0;
             $churned = 0;
+            $paused = 0;
 
             foreach ($subs as $sub) {
                 if ($this->wasActiveAt($sub, $startS)) {
@@ -699,6 +708,12 @@ class MetricsService
                     && $sub['ended'] >= $startS && $sub['ended'] < $endS) {
                     $churned++;
                 }
+                // Went on hold this month: out of the active count, but not
+                // churn -- an on-hold subscription can still resume.
+                if ($sub['held'] !== null && $sub['held'] >= $startS && $sub['held'] < $endS
+                    && $sub['held'] > $sub['created']) {
+                    $paused++;
+                }
             }
 
             $rows[] = [
@@ -706,6 +721,7 @@ class MetricsService
                 'active_start' => $activeStart,
                 'new' => $joined,
                 'churned' => $churned,
+                'paused' => $paused,
                 'active_end' => $activeEnd,
                 'churn_rate' => $activeStart > 0 ? round($churned / $activeStart * 100, 1) : null,
                 // The month the data stops inside is only counted up to the
@@ -725,7 +741,7 @@ class MetricsService
      * The PHP twin of {@see activeAsOf()}'s SQL predicate, for the in-memory
      * month walk. Kept next to it so the two definitions stay in step.
      *
-     * @param  array{created:string, ended:?string, terminal:bool, active:bool}  $sub
+     * @param  array{created:string, ended:?string, terminal:bool, active:bool, held:?string}  $sub
      */
     private function wasActiveAt(array $sub, string $instant): bool
     {
@@ -735,6 +751,10 @@ class MetricsService
 
         if ($sub['active']) {
             return true;
+        }
+
+        if ($sub['held'] !== null) {
+            return $sub['held'] >= $instant;
         }
 
         return $sub['terminal'] && $sub['ended'] !== null && $sub['ended'] >= $instant;
@@ -756,6 +776,8 @@ class MetricsService
     {
         $months = max(1, min(60, $months));
 
+        $holds = $this->holdStarts();
+
         $subs = $this->subscriptionLifecycle()
             ->whereNotNull('s.date_created_gmt')
             ->selectRaw('s.id, s.status, s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended')
@@ -766,6 +788,7 @@ class MetricsService
                 'ended' => $r->ended === null ? null : (string) $r->ended,
                 'terminal' => in_array((string) $r->status, self::TERMINAL, true),
                 'active' => (string) $r->status === 'active',
+                'held' => $holds[(int) $r->id]['held'] ?? null,
             ])
             ->all();
 
@@ -821,8 +844,11 @@ class MetricsService
                 }
 
                 // Live subscriptions have no meaningful end date, so only a
-                // terminal one can have stopped before the window closed.
-                $stillRunning = ! $sub['terminal'] || $sub['ended'] === null || $sub['ended'] >= $endS;
+                // terminal one -- or one that went on hold -- can have stopped
+                // before the window closed.
+                $stillRunning = $sub['held'] !== null
+                    ? $sub['held'] >= $endS
+                    : ! $sub['terminal'] || $sub['ended'] === null || $sub['ended'] >= $endS;
 
                 $base += $was;
                 $retained += $stillRunning ? $this->paymentBefore($payments[$sub['id']] ?? [], $endS) : 0.0;
@@ -914,6 +940,8 @@ class MetricsService
     {
         $months = max(1, min(60, $months));
 
+        $holds = $this->holdStarts();
+
         $subs = $this->subscriptionLifecycle()
             ->whereNotNull('s.date_created_gmt')
             ->selectRaw('s.id, s.status, s.date_created_gmt as created, s.billing_period, '.
@@ -925,6 +953,7 @@ class MetricsService
                 'ended' => $r->ended === null ? null : (string) $r->ended,
                 'terminal' => in_array((string) $r->status, self::TERMINAL, true),
                 'active' => (string) $r->status === 'active',
+                'held' => $holds[(int) $r->id]['held'] ?? null,
                 // What one month of this subscription is worth, as a share of
                 // whatever it pays per cycle.
                 'monthly_share' => 30 / $this->cycleDays(
@@ -1915,6 +1944,10 @@ class MetricsService
             return $this->endedAsOf($status, $end);
         }
 
+        if ($status === 'on-hold') {
+            return $this->onHoldAsOf($end);
+        }
+
         return $this->subscriptions()
             ->where('status', $status)
             ->where('date_created_gmt', '<', $end)
@@ -1958,16 +1991,117 @@ class MetricsService
         return $this->subscriptionLifecycle()
             ->whereNotNull('s.date_created_gmt')
             ->where('s.date_created_gmt', '<', $end)
-            ->where(function (Builder $q) use ($end) {
-                $q->where('s.status', 'active')
-                    ->orWhere(function (Builder $terminal) use ($end) {
-                        // NULL end date => we cannot prove it was still live, so
-                        // the comparison is NULL and the row drops out.
-                        $terminal->whereIn('s.status', self::TERMINAL)
-                            ->whereRaw($this->effectiveEndExpr().' >= ?', [$end]);
-                    });
-            })
+            ->where(fn (Builder $q) => $this->whereLiveAt($q, $end))
             ->count();
+    }
+
+    /**
+     * The "was an active subscriber at $instant" predicate, shared by every SQL
+     * query that asks it. {@see wasActiveAt()} is its PHP twin.
+     *
+     * An `on-hold` subscription counts as active until the moment it went on
+     * hold ({@see holdStarts()}), so a hold that begins in September does not
+     * take the subscriber out of August's count.
+     */
+    private function whereLiveAt(Builder $q, string $instant): void
+    {
+        $q->where('s.status', 'active')
+            ->orWhere(function (Builder $terminal) use ($instant) {
+                // NULL end date => we cannot prove it was still live, so
+                // the comparison is NULL and the row drops out.
+                $terminal->whereIn('s.status', self::TERMINAL)
+                    ->whereRaw($this->effectiveEndExpr().' >= ?', [$instant]);
+            })
+            ->orWhereIn('s.id', $this->heldAfter($instant));
+    }
+
+    /**
+     * When each `on-hold` subscription is estimated to have gone on hold,
+     * keyed by id.
+     *
+     * The export carries no hold date, only the live status, so reading
+     * `on-hold` as-is pulls every subscriber who pauses this month out of every
+     * earlier month too. WooCommerce puts a subscription on hold when a renewal
+     * is due and not paid, so the hold is dated one billing cycle after its
+     * last completed payment -- or its sign-up, if it never paid, in which case
+     * it was never active. Capped at the newest data, so a subscription on hold
+     * now reads as on hold in the current month even when it was suspended
+     * mid-cycle.
+     *
+     * @return array<int, array{created:string, held:string}>
+     */
+    public function holdStarts(): array
+    {
+        $lastPaid = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('status', 'completed')
+            ->whereNotNull('subscription_id')
+            ->whereNotNull('date_created_gmt')
+            ->selectRaw('subscription_id, MAX(date_created_gmt) as last_paid_at')
+            ->groupBy('subscription_id');
+
+        $rows = DB::table('records as s')
+            ->leftJoinSub($lastPaid, 'lp', 'lp.subscription_id', '=', 's.id')
+            ->where('s.record_type', 'shop_subscription')
+            ->where('s.status', 'on-hold')
+            ->whereNotNull('s.date_created_gmt')
+            ->selectRaw('s.id, s.date_created_gmt, s.billing_period, s.billing_interval, lp.last_paid_at')
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return [];
+        }
+
+        $latest = $this->latestDataInstant();
+        $out = [];
+
+        foreach ($rows as $row) {
+            $created = CarbonImmutable::parse((string) $row->date_created_gmt);
+
+            $held = $row->last_paid_at === null
+                ? $created
+                : CarbonImmutable::parse((string) $row->last_paid_at)->addDays($this->cycleDays(
+                    $row->billing_period === null ? null : (string) $row->billing_period,
+                    $row->billing_interval === null ? null : (int) $row->billing_interval,
+                ));
+
+            if ($held->gt($latest)) {
+                $held = $latest;
+            }
+
+            if ($held->lt($created)) {
+                $held = $created;
+            }
+
+            $out[(int) $row->id] = [
+                'created' => $created->toDateTimeString(),
+                'held' => $held->toDateTimeString(),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Ids of `on-hold` subscriptions that had not yet gone on hold at $instant.
+     *
+     * @return array<int, int>
+     */
+    private function heldAfter(string $instant): array
+    {
+        return array_keys(array_filter(
+            $this->holdStarts(),
+            fn (array $h) => $h['held'] >= $instant,
+        ));
+    }
+
+    /** `on-hold` subscriptions that were already on hold at instant $end. */
+    private function onHoldAsOf(string $end): int
+    {
+        return count(array_filter(
+            $this->holdStarts(),
+            fn (array $h) => $h['created'] < $end && $h['held'] < $end,
+        ));
     }
 
     /** Subscriptions that had already left in $status by instant $end. */
@@ -2175,13 +2309,7 @@ class MetricsService
         return $this->subscriptionLifecycle()
             ->whereNotNull('s.date_created_gmt')
             ->where('s.date_created_gmt', '<', $instant)
-            ->where(function (Builder $q) use ($instant) {
-                $q->where('s.status', 'active')
-                    ->orWhere(function (Builder $t) use ($instant) {
-                        $t->whereIn('s.status', self::TERMINAL)
-                            ->whereRaw($this->effectiveEndExpr().' >= ?', [$instant]);
-                    });
-            })
+            ->where(fn (Builder $q) => $this->whereLiveAt($q, $instant))
             ->selectRaw(str_replace('billing_email', 's.billing_email', str_replace('customer_id', 's.customer_id', $key)).' as ckey')
             ->distinct()
             ->pluck('ckey')
@@ -2257,19 +2385,15 @@ class MetricsService
         $openers = $this->subscriptionLifecycle()
             ->whereNotNull('s.date_created_gmt')
             ->where('s.date_created_gmt', '<', $start)
-            ->where(function (Builder $q) use ($start) {
-                $q->where('s.status', 'active')
-                    ->orWhere(function (Builder $t) use ($start) {
-                        $t->whereIn('s.status', self::TERMINAL)
-                            ->whereRaw($this->effectiveEndExpr().' >= ?', [$start]);
-                    });
-            })
+            ->where(fn (Builder $q) => $this->whereLiveAt($q, $start))
             ->selectRaw('s.id, s.status, '.$this->effectiveEndExpr().' as ended')
             ->get();
 
         if ($openers->isEmpty()) {
             return ['nrr' => null, 'grr' => null, 'start' => 0.0, 'retained' => 0.0];
         }
+
+        $holds = $this->holdStarts();
 
         $ids = $openers->pluck('id')->all();
         $priceAtStart = $this->lastPaymentBefore($ids, $start);
@@ -2289,8 +2413,13 @@ class MetricsService
             // An end date only means anything for a terminal subscription --
             // for a live one effectiveEndExpr() returns its last ORDER date,
             // which would read as though every active subscriber had left.
+            // A subscription that went on hold inside the window stopped
+            // billing, so its revenue was not retained.
             $isTerminal = in_array((string) $o->status, self::TERMINAL, true);
-            $stillRunning = ! $isTerminal || $o->ended === null || (string) $o->ended >= $end;
+            $held = $holds[(int) $o->id]['held'] ?? null;
+            $stillRunning = $held !== null
+                ? $held >= $end
+                : ! $isTerminal || $o->ended === null || (string) $o->ended >= $end;
             $now = $stillRunning ? (float) ($priceAtEnd[(int) $o->id] ?? 0.0) : 0.0;
 
             $base += $was;
