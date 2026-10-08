@@ -85,3 +85,6 @@ All notable changes to Hurayra Analytics. One entry per audit task
 ### P2-1: "Pending" vs "Pending cancellation"
 - WooCommerce's `pending` subscription status is now labelled **Awaiting payment** everywhere; `pending-cancel` is **Pending cancellation**.
 - Both are shown on both the Overview (under the subscription mix) and the Subscribers page, and the status mix always lists both, even at zero.
+
+### P2-2: Overview renewals card headline
+- The card now leads with the total and value ("99 renewals · £2,277.90" on the baseline for the next 14 days), with "42 at first renewal" as the subline. The first-renewal count alone was being read as the total.

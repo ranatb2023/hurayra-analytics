@@ -315,10 +315,18 @@
             <div class="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm">
                 <div class="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
                     <div>
-                        <h3 class="text-sm font-bold text-slate-700">Renewals due · next <span x-text="renewals.days"></span> days</h3>
+                        <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                            Renewals due · next <span x-text="renewals.days"></span> days
+                        </p>
+                        {{-- The total leads. "23 at first renewal" on its own was
+                             read as the number of renewals due. --}}
+                        <h3 class="text-sm font-bold text-slate-700" data-renewals-headline>
+                            <span x-text="renewals.total"></span> renewals ·
+                            <span x-text="money(renewals.value)"></span>
+                        </h3>
                         <p class="text-[11px] text-slate-500">
                             <span class="font-semibold text-amber-600" x-text="renewals.at_first_renewal"></span>
-                            at their first renewal — half never survive it
+                            at first renewal — half never survive it
                         </p>
                     </div>
                     <button type="button" @click="view = 'acquisition'"

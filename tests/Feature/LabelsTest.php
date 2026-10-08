@@ -57,4 +57,18 @@ class LabelsTest extends TestCase
         $this->assertGreaterThanOrEqual(2, substr_count($html, "value('awaiting_payment')"));
         $this->assertGreaterThanOrEqual(2, substr_count($html, "value('pending_cancellation')"));
     }
+
+    // ---- P2-2 ---------------------------------------------------------------
+
+    public function test_the_overview_renewals_card_leads_with_the_total_and_value(): void
+    {
+        $this->sub(1, 'active');
+
+        $html = $this->get('/')->assertOk()->getContent();
+        $headline = substr($html, strpos($html, 'data-renewals-headline'), 300);
+
+        $this->assertStringContainsString('renewals.total', $headline);
+        $this->assertStringContainsString('money(renewals.value)', $headline);
+        $this->assertStringContainsString('at first renewal', $html);
+    }
 }
