@@ -1254,6 +1254,7 @@ class MetricsService
             ->leftJoinSub($paid, 'p', 'p.subscription_id', '=', 's.id')
             ->where('s.record_type', 'shop_subscription')
             ->selectRaw('s.id, s.'.$dimension.' as segment, COALESCE(p.payments, 0) as payments, COALESCE(p.revenue, 0) as revenue')
+            ->selectRaw('s.date_created_gmt as created, s.billing_period, s.billing_interval, s.next_payment_at')
             ->get();
 
         // Group in PHP: "still active" is the shared isActive() rule, which no
@@ -1264,11 +1265,18 @@ class MetricsService
             $label = $this->cleanAttribute($r->segment) ?? '(unattributed)';
             $sub = $book[(int) $r->id] ?? null;
 
-            $groups[$label] ??= ['subs' => 0, 'never_paid' => 0, 'repeat_payers' => 0, 'still_active' => 0, 'revenue' => 0.0];
+            $groups[$label] ??= self::EMPTY_SEGMENT;
             $g = &$groups[$label];
             $g['subs']++;
             $g['never_paid'] += (int) $r->payments === 0 ? 1 : 0;
-            $g['repeat_payers'] += (int) $r->payments >= 2 ? 1 : 0;
+
+            // Right-censoring: a subscription whose second payment is not due
+            // yet has not failed to reach it. Counting it as "did not" dragged
+            // down every channel that is mostly recent sign-ups.
+            if ($this->secondPaymentDueBy($r, $asOf)) {
+                $g['eligible']++;
+                $g['repeat_payers'] += (int) $r->payments >= 2 ? 1 : 0;
+            }
             $g['still_active'] += $sub !== null && $this->isActive($sub, $asOf) ? 1 : 0;
             $g['revenue'] += (float) $r->revenue;
             unset($g);
@@ -1277,7 +1285,7 @@ class MetricsService
         // Segments too small to read are folded into one "Other" row rather
         // than dropped: dropped, they made the "still active" column add up to
         // less than the active subscriber count on the Overview.
-        $other = ['subs' => 0, 'never_paid' => 0, 'repeat_payers' => 0, 'still_active' => 0, 'revenue' => 0.0];
+        $other = self::EMPTY_SEGMENT;
         $folded = 0;
 
         foreach ($groups as $label => $g) {
@@ -1312,19 +1320,49 @@ class MetricsService
         ];
     }
 
+    /** Accumulator for one segment of {@see segmentPerformance()}. */
+    private const EMPTY_SEGMENT = [
+        'subs' => 0, 'never_paid' => 0, 'eligible' => 0, 'repeat_payers' => 0, 'still_active' => 0, 'revenue' => 0.0,
+    ];
+
+    /**
+     * Whether a subscription's SECOND payment had fallen due by $asOf, so
+     * whether it can be judged on reaching it.
+     *
+     * While it is still on its first cycle WooCommerce schedules that payment
+     * as `next_payment_at`; otherwise it is one billing cycle after sign-up.
+     */
+    private function secondPaymentDueBy(object $sub, string $asOf): bool
+    {
+        if ((int) $sub->payments <= 1 && $sub->next_payment_at !== null) {
+            return (string) $sub->next_payment_at <= $asOf;
+        }
+
+        $cycle = $this->cycleDays(
+            $sub->billing_period === null ? null : (string) $sub->billing_period,
+            $sub->billing_interval === null ? null : (int) $sub->billing_interval,
+        );
+
+        return Clock::gmt(CarbonImmutable::parse((string) $sub->created)->addDays($cycle)) <= $asOf;
+    }
+
     /**
      * One row of {@see segmentPerformance()}.
      *
-     * @param  array{subs:int, never_paid:int, repeat_payers:int, still_active:int, revenue:float}  $g
+     * The repeat rate is over the `eligible` subscriptions only -- those whose
+     * second payment was due -- and the row reports that n alongside it.
+     *
+     * @param  array{subs:int, never_paid:int, eligible:int, repeat_payers:int, still_active:int, revenue:float}  $g
      * @return array<string, mixed>
      */
     private function segmentRow(string $segment, array $g): array
     {
         $subs = $g['subs'];
+        $eligible = $g['eligible'];
         $revenue = $g['revenue'];
 
-        $repeatPct = round($g['repeat_payers'] / $subs * 100, 1);
-        $margin = $this->marginOfError($g['repeat_payers'], $subs);
+        $repeatPct = $eligible > 0 ? round($g['repeat_payers'] / $eligible * 100, 1) : null;
+        $margin = $this->marginOfError($g['repeat_payers'], $eligible);
         $ltv = round($revenue / $subs, 2);
 
         return [
@@ -1332,13 +1370,16 @@ class MetricsService
             'subs' => $subs,
             'never_paid' => $g['never_paid'],
             'never_paid_pct' => round($g['never_paid'] / $subs * 100, 1),
+            // repeat = reached a 2nd payment ÷ subscriptions whose 2nd payment was due
+            'eligible' => $eligible,
+            'repeat_payers' => $g['repeat_payers'],
             'repeat_pct' => $repeatPct,
             // A rate without its sample size invites acting on noise: at
             // n = 13 a 69% repeat rate spans roughly 44%-94%.
             'repeat_margin' => $margin,
-            'repeat_low' => round(max(0, $repeatPct - $margin), 1),
-            'repeat_high' => round(min(100, $repeatPct + $margin), 1),
-            'reliable' => $subs >= (int) config('metrics.segment_min_reliable_n', 30),
+            'repeat_low' => $repeatPct === null ? null : round(max(0, $repeatPct - $margin), 1),
+            'repeat_high' => $repeatPct === null ? null : round(min(100, $repeatPct + $margin), 1),
+            'reliable' => $eligible >= (int) config('metrics.segment_min_reliable_n', 30),
             'still_active' => $g['still_active'],
             'revenue' => round($revenue, 2),
             'ltv' => $ltv,

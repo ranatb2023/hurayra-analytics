@@ -256,6 +256,7 @@ export default (config = {}) => ({
 
     /** Bar width for the repeat-rate meter, on a 0-100 scale. */
     repeatBarWidth(pct) {
+        if (pct === null || pct === undefined) return '0%';
         return `${Math.max(2, Math.min(100, pct)).toFixed(1)}%`;
     },
 

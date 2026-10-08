@@ -66,3 +66,8 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - Cohort retention at M(n) = % of the cohort not cancelled or expired at the end of month n. On hold is not leaving. The curve can only stay flat or fall. The month in progress is measured at the data timestamp and shown in italics; months that have not happened are blank.
 - The old "% with a completed order in month n" grid is kept behind an **Order activity** toggle. It shows billing rhythm, not retention: two-monthly and six-weekly plans skip months.
 - Baseline: no cohort's curve rises. The February 2026 cohort reads M3 25.0% → M4 21.9% (activity: 17.7% → 20.8%).
+
+### P1-9: "Reached 2nd payment" right-censoring
+- The denominator is now only the subscriptions whose 2nd payment was due by now: the scheduled next payment for a sub still on its first cycle, otherwise sign-up + one billing cycle. A sub that signed up yesterday is excluded rather than counted as a failure.
+- Each row shows "n eligible". The confidence range and the "n too small" flag use that n.
+- Baseline: Klaviyo, mostly recent sign-ups, is judged on 19 of its 30 subscriptions: 42.1%.

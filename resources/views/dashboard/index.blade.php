@@ -351,7 +351,8 @@
                                 <span class="block h-full rounded-full bg-linear-to-r from-sky-400 to-indigo-500"
                                       :style="`width: ${repeatBarWidth(r.repeat_pct)}`"></span>
                             </span>
-                            <span class="w-10 shrink-0 text-right text-xs font-semibold tabular-nums text-slate-700" x-text="`${r.repeat_pct}%`"></span>
+                            <span class="w-10 shrink-0 text-right text-xs font-semibold tabular-nums text-slate-700"
+                                  x-text="r.repeat_pct === null ? '—' : `${r.repeat_pct}%`"></span>
                             <span class="w-14 shrink-0 text-right text-xs tabular-nums text-slate-400" x-text="money(r.ltv)"></span>
                         </div>
                     </template>
@@ -787,7 +788,9 @@
                         <th class="px-5 py-2.5 text-right">Still active</th>
                         <th class="px-5 py-2.5 text-right">Revenue</th>
                         <th class="px-5 py-2.5 text-right">LTV / sub</th>
-                        <th class="px-5 py-2.5">Reached 2nd payment <span class="font-normal normal-case text-slate-300">· 95% range</span></th>
+                        <th class="px-5 py-2.5" title="Reached a 2nd payment ÷ subscriptions whose 2nd payment was due by now. Ones not yet due are left out rather than counted as failures.">
+                            Reached 2nd payment <span class="font-normal normal-case text-slate-300">· 95% range · n eligible</span>
+                        </th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
@@ -800,7 +803,7 @@
                                       x-text="`· ${r.rollup} smaller`"></span>
                                 <span x-show="! r.reliable"
                                       class="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
-                                      :title="`Only ${r.subs} subscriptions — too few to act on`">n too small</span>
+                                      :title="`Only ${r.eligible} subscriptions old enough to judge — too few to act on`">n too small</span>
                             </td>
                             <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="r.subs"></td>
                             {{-- Never paid is a checkout failure, not churn. --}}
@@ -818,12 +821,14 @@
                                     </span>
                                     <span class="w-12 text-right font-semibold tabular-nums"
                                           :class="r.reliable ? 'text-slate-700' : 'text-slate-400'"
-                                          x-text="`${r.repeat_pct}%`"></span>
+                                          x-text="r.repeat_pct === null ? '—' : `${r.repeat_pct}%`"></span>
                                     {{-- The interval is the point: at n = 13 a
                                          69% rate spans 44%-94%, which is not a
                                          finding. --}}
                                     <span class="w-24 text-right text-[11px] tabular-nums text-slate-400"
-                                          x-text="`${r.repeat_low}–${r.repeat_high}`"></span>
+                                          x-text="r.repeat_pct === null ? '' : `${r.repeat_low}–${r.repeat_high}`"></span>
+                                    <span class="w-16 text-right text-[11px] tabular-nums text-slate-400"
+                                          x-text="`n=${r.eligible}`"></span>
                                 </div>
                             </td>
                         </tr>
