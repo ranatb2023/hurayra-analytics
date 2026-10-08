@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\ChannelRuleController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\DataHealthController;
 use App\Http\Controllers\KlaviyoController;
 use App\Http\Controllers\MetricsController;
 use App\Http\Controllers\UploadController;
@@ -39,6 +40,10 @@ Route::get('/settings/channels', [ChannelRuleController::class, 'index'])->name(
 Route::post('/settings/channels', [ChannelRuleController::class, 'store'])->name('channels.store');
 Route::put('/settings/channels/{rule}', [ChannelRuleController::class, 'update'])->name('channels.update');
 Route::delete('/settings/channels/{rule}', [ChannelRuleController::class, 'destroy'])->name('channels.destroy');
+
+// Data Health: rows the metrics exclude or that could mislead them.
+Route::get('/data-health', [DataHealthController::class, 'index'])->name('data-health.index');
+Route::get('/data-health/{section}/export', [DataHealthController::class, 'export'])->name('data-health.export');
 
 // Upload + import history.
 Route::get('/uploads', [UploadController::class, 'index'])->name('uploads.index');

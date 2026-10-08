@@ -121,3 +121,13 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - The API revision default moves from 2025-01-15 to **2026-07-15** (current GA). No revision in between changed the reports, list, metrics or account endpoints this app calls. **A local `.env` that sets `KLAVIYO_REVISION=2025-01-15` overrides this and should be updated.**
 - Open-rate tooltips say the figure is inflated by Apple Mail privacy.
 - Requires `php artisan migrate`; the next sync fills the new columns.
+
+### P3-3: Data Health page
+- New **Data Health** page (sidebar). Each check has a count, a list and a CSV export:
+  - orders / subscriptions with an invalid status for their type;
+  - £0 completed orders;
+  - customers with multiple active subscriptions to the same product;
+  - unmapped traffic sources;
+  - on-hold subscriptions by age (0–15, 16–30, 31–45, 45+ days);
+  - dashboard vs source row counts per status.
+- Nothing on the page modifies data. Baseline: 3 invalid-status orders, 8 £0 completed orders, 14 duplicate active subscriptions, 15 unmapped sources, 55 on hold (18 / 15 / 10 / 12 by age); per-status counts match except the excluded wc-active and trash orders.

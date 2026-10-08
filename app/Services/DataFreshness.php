@@ -118,6 +118,28 @@ class DataFreshness
     }
 
     /**
+     * Row counts per type and status in the source, for the Data Health
+     * reconciliation. Every imported row, whatever its status.
+     *
+     * @return array{counts: array<string, array<string, int>>, from: string}
+     */
+    public function sourceStatusCounts(): array
+    {
+        $counts = [];
+
+        foreach (DB::table('records')
+            ->selectRaw('record_type, status, COUNT(*) as n')
+            ->groupBy('record_type', 'status')
+            ->orderBy('record_type')
+            ->orderBy('status')
+            ->get() as $r) {
+            $counts[(string) $r->record_type][(string) $r->status] = (int) $r->n;
+        }
+
+        return ['counts' => $counts, 'from' => 'last import'];
+    }
+
+    /**
      * Everything the freshness strip shows.
      *
      * `level` is green / amber / red from how long it has been since the last

@@ -54,10 +54,11 @@
                 </span>
             @endif
 
-            <span title="Dashboard counts real order statuses only. The difference is listed on the Data Health page.">
+            <a href="{{ route('data-health.index') }}#status_counts" class="hover:underline"
+               title="Dashboard counts real order statuses only. The difference is listed on the Data Health page.">
                 Orders <span class="font-semibold">{{ number_format($f['dashboard_orders']) }}</span> on dashboard
                 · <span class="font-semibold">{{ number_format($source['count']) }}</span> in {{ $source['from'] }}
-            </span>
+            </a>
 
             {{-- Only on the dashboard, where a period is selected. --}}
             @hasSection('app_data')
