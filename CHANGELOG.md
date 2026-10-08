@@ -31,3 +31,8 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - Churn rate = churned ÷ (active at start + new in period), for both the Real and Gross variants and for every month in the history. Exposed as `churn_base`.
 - Same-month joiners who leave are now in the denominator as well as the numerator, so no month can exceed 100%. On the baseline data October 2025 goes from 165.5% to 46.6%.
 - The formula is in the tooltip on both churn cards and in the Retention caption.
+
+### P1-2: Adjusted churn including dormant on-hold
+- New KPI **Churn · Adjusted** = (cancelled + expired + on-hold subscriptions that went dormant in the period) ÷ (active at start + new in period). Dormant = on hold with no successful payment for 1.5 billing cycles (45 days on a monthly plan); each is counted once, in the period it crosses that line.
+- **Revenue at Risk** = monthly value of every dormant on-hold subscription + failed/pending renewal orders in the period (was renewal orders only, so £0.00 whenever none failed). Baseline: September £930.18; October to 8 Oct £679.22.
+- Adjusted is shown next to Real on Overview and Retention.

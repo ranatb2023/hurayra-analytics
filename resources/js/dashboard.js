@@ -86,8 +86,8 @@ export default (config = {}) => ({
     currencyKeys: ['total_revenue', 'average_order_value', 'subscription_revenue', 'one_time_revenue',
         'revenue_at_risk', 'revenue_per_customer', 'mrr', 'arr', 'arpu',
         'gross_revenue', 'net_revenue', 'tax_collected', 'shipping_collected', 'refunded',
-        'net_revenue_after_refunds', 'contribution'],
-    percentKeys: ['churn_rate', 'monthly_churn_rate', 'monthly_churn_rate_net', 'net_revenue_retention',
+        'net_revenue_after_refunds', 'contribution', 'revenue_at_risk_dormant', 'revenue_at_risk_failed_renewals'],
+    percentKeys: ['churn_rate', 'monthly_churn_rate', 'monthly_churn_rate_net', 'monthly_churn_rate_adjusted', 'net_revenue_retention',
         'gross_revenue_retention', 'renewal_success_rate', 'repeat_rate', 'end_date_coverage',
         'customer_churn_rate'],
 
@@ -313,7 +313,14 @@ export default (config = {}) => ({
     onHoldNote() {
         const d = this.metrics.on_hold_dormant ?? 0;
         if (!d) return 'live state, as of the period end';
-        return `${d} dormant 45d+ — stopped paying, never counted as churn`;
+        return `${d} dormant 1.5 cycles+ — stopped paying, in Churn · Adjusted`;
+    },
+
+    /** What the Revenue at Risk figure is made of. */
+    revenueAtRiskNote() {
+        const m = this.metrics ?? {};
+        if (m.revenue_at_risk_dormant === undefined) return '';
+        return `${this.money(m.revenue_at_risk_dormant)}/mo dormant + ${this.money(m.revenue_at_risk_failed_renewals)} failed renewals`;
     },
 
     onHoldDormant() {

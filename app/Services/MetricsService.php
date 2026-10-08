@@ -253,7 +253,23 @@ class MetricsService
 
         $renewalTotal = $orderStats->relationship('renewal');
         $renewalCompleted = $orderStats->count('completed', 'renewal');
-        $revenueAtRisk = $orderStats->amount('failed', 'renewal') + $orderStats->amount('pending', 'renewal');
+
+        // On hold with no successful payment for 1.5 cycles: stopped paying,
+        // but churn only counts cancelled/expired, so they never show up in
+        // it. Each one is counted in the period it crossed the line -- once,
+        // not again every month it stays dormant.
+        $dormant = $this->dormantOnHoldSubscriptions($endS);
+        $dormantCrossed = count(array_filter(
+            $dormant,
+            fn (array $d) => $d['dormant_from'] >= $startS && $d['dormant_from'] < $endS,
+        ));
+        $adjustedChurn = $churnedInPeriod + $dormantCrossed;
+
+        // What is at risk: every dormant subscription's monthly value, plus
+        // the renewal orders in the period that failed or are still unpaid.
+        $failedRenewalValue = $orderStats->amount('failed', 'renewal') + $orderStats->amount('pending', 'renewal');
+        $dormantValue = array_sum(array_column($dormant, 'monthly_value'));
+        $revenueAtRisk = $dormantValue + $failedRenewalValue;
 
         // ---- Customers (orders in window, keyed by customer_id) ----
         $byCustomer = $this->ordersInWindow($startS, $endS)
@@ -327,7 +343,11 @@ class MetricsService
             // published figure never silently changes meaning.
             'monthly_churn_rate_net' => $this->churnRate($realChurn, $churnBase),
             'churn_base' => $churnBase,
-            'on_hold_dormant' => $this->dormantOnHold($endS),
+            'on_hold_dormant' => count($dormant),
+            'on_hold_dormant_in_period' => $dormantCrossed,
+            // (cancelled + expired + newly dormant on-hold) ÷ churn base
+            'churned_adjusted' => $adjustedChurn,
+            'monthly_churn_rate_adjusted' => $this->churnRate($adjustedChurn, $churnBase),
             'mrr' => $recurring['mrr'],
             'arr' => $recurring['arr'],
             'arpu' => $recurring['arpu'],
@@ -341,6 +361,8 @@ class MetricsService
             'renewal_success_rate' => $renewalTotal > 0 ? round($renewalCompleted / $renewalTotal * 100, 1) : null,
             'failed_renewals' => $renewalTotal - $renewalCompleted,
             'revenue_at_risk' => round($revenueAtRisk, 2),
+            'revenue_at_risk_dormant' => round($dormantValue, 2),
+            'revenue_at_risk_failed_renewals' => round($failedRenewalValue, 2),
 
             // ----- Customers -----
             'unique_customers' => $uniqueCustomers,
@@ -2296,15 +2318,22 @@ class MetricsService
     }
 
     /**
-     * `on-hold` subscriptions with no completed order for
-     * {@see ON_HOLD_DORMANT_DAYS}, as of $end.
+     * The dormant on-hold subscriptions as of $end, each with the instant it
+     * became dormant and what it was worth per month.
      *
      * These have stopped paying but will never appear in churn, because churn
      * only counts terminal statuses and nothing promotes a stalled on-hold to
-     * one. Surfaced so the gap is visible instead of silently understating
-     * attrition.
+     * one. Surfaced -- and counted in Churn · Adjusted -- so the gap is
+     * visible instead of silently understating attrition.
+     *
+     * Dormant = on hold with no successful payment for
+     * {@see ON_HOLD_DORMANT_CYCLES} billing cycles (45 days on a monthly plan).
+     * Never billed: measured from sign-up, since that is when the first
+     * payment was due.
+     *
+     * @return array<int, array{dormant_from:string, monthly_value:float}>
      */
-    private function dormantOnHold(string $end): int
+    private function dormantOnHoldSubscriptions(string $end): array
     {
         $at = CarbonImmutable::parse($end);
 
@@ -2321,20 +2350,33 @@ class MetricsService
             ->where('s.record_type', 'shop_subscription')
             ->where('s.status', 'on-hold')
             ->where('s.date_created_gmt', '<', $end)
-            ->selectRaw('s.billing_period, s.billing_interval, s.date_created_gmt, lp.last_paid_at')
+            ->selectRaw('s.id, s.billing_period, s.billing_interval, s.date_created_gmt, lp.last_paid_at')
             ->get();
 
-        $dormant = 0;
+        $dormant = [];
 
         foreach ($rows as $row) {
-            // Never billed: measured from sign-up, since that is when the first
-            // payment was due.
             $since = CarbonImmutable::parse((string) ($row->last_paid_at ?? $row->date_created_gmt));
-            $allowed = $this->cycleDays($row->billing_period, $row->billing_interval) * self::ON_HOLD_DORMANT_CYCLES;
+            $cycle = $this->cycleDays($row->billing_period, $row->billing_interval === null ? null : (int) $row->billing_interval);
+            $allowed = $cycle * self::ON_HOLD_DORMANT_CYCLES;
 
             if ($since->diffInDays($at) > $allowed) {
-                $dormant++;
+                $dormant[(int) $row->id] = [
+                    'dormant_from' => Clock::gmt($since->addSeconds((int) round($allowed * 86400))),
+                    'cycle_days' => $cycle,
+                ];
             }
+        }
+
+        // Priced at the last payment, normalised to a month by its own cycle --
+        // the same way MRR prices a live subscription.
+        $price = $this->lastPaymentBefore(array_keys($dormant), $end);
+
+        foreach ($dormant as $id => $d) {
+            $dormant[$id] = [
+                'dormant_from' => $d['dormant_from'],
+                'monthly_value' => round((float) ($price[$id] ?? 0.0) * 30 / $d['cycle_days'], 2),
+            ];
         }
 
         return $dormant;

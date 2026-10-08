@@ -89,6 +89,8 @@
     $retentionCards = [
         'monthly_churn_rate_net' => $M('Churn · Real', $icons['x_circle'], 1, 'bad', "'excludes failed sign-ups'",
             'Churn · Real = (subscribers lost − failed sign-ups) ÷ (active at period start + new in period) × 100. Failed sign-ups ended without ever completing an order.'),
+        'monthly_churn_rate_adjusted' => $M('Churn · Adjusted', $icons['pause'], 1, 'bad', "'includes dormant on-hold'",
+            'Churn · Adjusted = (subscribers lost + on-hold subscriptions that went dormant this period) ÷ (active at period start + new in period) × 100. Dormant = on hold with no successful payment for 1.5 billing cycles (45 days on a monthly plan). Each is counted once, in the period it crosses that line.'),
         'net_revenue_retention' => $M('Net Revenue Retention', $icons['dollar'], 1, 'good', "'of the opening book'",
             'Of the recurring revenue on the books when the period opened, how much was still billing at the end. Counts only subscribers who were already there, so new sign-ups cannot flatter it. Above 100% means upgrades outweighed losses.'),
     ];
@@ -98,8 +100,8 @@
         'customer_churn_rate' => $M('Churn · Customers', $icons['users'], 2, 'bad', "'people, not subscriptions'",
             'A customer has churned only when every subscription they hold has ended. 27% of cancellations belong to people who still have a live one — plan changes the subscription rate reports as losses.'),
         'renewal_success_rate' => $M('Renewal Success', $icons['arrow_path'], 2, 'good'),
-        'revenue_at_risk' => $M('Revenue at Risk', $icons['exclaim'], 2, 'bad', null,
-            'Value of failed and pending renewal orders in the period — recoverable, involuntary churn.'),
+        'revenue_at_risk' => $M('Revenue at Risk', $icons['exclaim'], 2, 'bad', 'revenueAtRiskNote()',
+            'Revenue at Risk = monthly value of every dormant on-hold subscription (last payment × 30 ÷ cycle days) + failed and pending renewal orders in the period. Recoverable, involuntary churn.'),
         'failed_renewals' => $M('Failed Renewals', $icons['x_circle'], 2, 'bad'),
     ];
 
@@ -133,6 +135,8 @@
             'Of the recurring revenue on the books when the period opened, how much was still billing at the end. New sign-ups are excluded, so it cannot be flattered by acquisition.'),
         'monthly_churn_rate_net' => $M('Churn · Real', $icons['x_circle'], 1, 'bad', "'excludes failed sign-ups'",
             'Churn · Real = (subscribers lost − failed sign-ups) ÷ (active at period start + new in period) × 100. Failed sign-ups ended without ever completing an order.'),
+        'monthly_churn_rate_adjusted' => $M('Churn · Adjusted', $icons['pause'], 1, 'bad', "'includes dormant on-hold'",
+            'Churn · Adjusted = (subscribers lost + on-hold subscriptions that went dormant this period) ÷ (active at period start + new in period) × 100. Dormant = on hold with no successful payment for 1.5 billing cycles (45 days on a monthly plan). Each is counted once, in the period it crosses that line.'),
         'total_revenue' => $M('Revenue', $icons['dollar'], 1, 'good', "'completed orders, gross'",
             'Completed orders in the period. Gross — it includes VAT and shipping, which together are about 24% of the figure.'),
     ];
@@ -232,7 +236,7 @@
          summary, and a summary that hides its own numbers is not one. --}}
     <div x-show="view === 'overview'" x-cloak>
 
-        <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div class="grid grid-cols-2 gap-4 lg:grid-cols-3 2xl:grid-cols-5">
             @foreach ($heroCards as $key => $c)
                 @include('dashboard.partials.card', ['key' => $key, 'm' => $c])
             @endforeach
@@ -419,9 +423,10 @@
     <div x-show="onHoldDormant() > 0" x-cloak
          class="mt-3 rounded-xl bg-amber-50 px-4 py-3 text-xs text-amber-900">
         <span class="font-semibold" x-text="onHoldDormant()"></span> on-hold subscription(s) have not had a
-        <em>successful</em> payment in 45+ days — failed retries do not count. They have stopped paying but will never appear in the churn figures, because churn only counts
-        <code class="font-mono">cancelled</code> and <code class="font-mono">expired</code>. Treat the churn rate as a
-        floor while this number is non-zero.
+        <em>successful</em> payment for 1.5 billing cycles (45 days on a monthly plan) — failed retries do not count.
+        They have stopped paying but never appear in Churn · Real, because it only counts
+        <code class="font-mono">cancelled</code> and <code class="font-mono">expired</code>.
+        <span class="font-semibold">Churn · Adjusted</span> includes them.
     </div>
 
     {{-- Drill-down: the actual rows behind "Subscribers Lost", so the number is
