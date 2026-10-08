@@ -793,7 +793,10 @@
                     <template x-for="r in segments.rows" :key="r.segment">
                         <tr class="transition hover:bg-slate-50/60">
                             <td class="max-w-[220px] truncate px-5 py-2.5 font-medium text-slate-700">
-                                <span x-text="r.segment"></span>
+                                <span x-text="r.segment"
+                                      :title="r.rollup ? `${r.rollup} segments with fewer than 5 subscriptions each` : ''"></span>
+                                <span x-show="r.rollup" class="ml-1 text-[11px] font-normal text-slate-400"
+                                      x-text="`· ${r.rollup} smaller`"></span>
                                 <span x-show="! r.reliable"
                                       class="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
                                       :title="`Only ${r.subs} subscriptions — too few to act on`">n too small</span>
@@ -825,6 +828,18 @@
                         </tr>
                     </template>
                 </tbody>
+                {{-- Every subscription is in exactly one row, so these match
+                     the Overview's active count. --}}
+                <tfoot x-show="segments.totals" class="border-t border-slate-200 bg-slate-50/70 text-sm font-semibold">
+                    <tr>
+                        <td class="px-5 py-2.5 text-slate-500">All subscriptions</td>
+                        <td class="px-5 py-2.5 text-right tabular-nums text-slate-700" x-text="segments.totals?.subs"></td>
+                        <td></td>
+                        <td class="px-5 py-2.5 text-right tabular-nums text-emerald-600" x-text="segments.totals?.still_active"
+                            title="Status active as of the data timestamp: the same rule as Active Subscribers on the Overview"></td>
+                        <td colspan="3"></td>
+                    </tr>
+                </tfoot>
             </table>
         </div>
     </div>
@@ -1363,7 +1378,7 @@
                     <tr>
                         <th class="px-5 py-2.5">Cohort</th>
                         <th class="px-5 py-2.5 text-right">Signed up</th>
-                        <th class="px-5 py-2.5 text-right">Still active</th>
+                        <th class="px-5 py-2.5 text-right" title="Status active as of the data timestamp: the same rule as Active Subscribers on the Overview">Still active</th>
                         <th class="px-5 py-2.5 text-right">Retained</th>
                         <th class="px-5 py-2.5 text-right">Median tenure</th>
                         <th class="px-5 py-2.5 text-right">Total earned</th>
@@ -1374,7 +1389,7 @@
                     <template x-for="row in cohortValue.rows" :key="row.cohort">
                         <tr class="transition hover:bg-slate-50/60">
                             <td class="whitespace-nowrap px-5 py-2.5 font-medium text-slate-700">
-                                <span x-text="cohortMonthLabel(row.cohort)"></span>
+                                <span x-text="row.rollup ? earlierCohortLabel(row) : cohortMonthLabel(row.cohort)"></span>
                                 <span x-show="row.immature"
                                       class="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">immature</span>
                             </td>

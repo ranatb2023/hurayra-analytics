@@ -211,11 +211,18 @@ class AttributionTest extends TestCase
         $this->assertSame('google', $result['rows'][0]['segment']);
     }
 
-    public function test_small_segments_are_held_back_as_noise(): void
+    public function test_small_segments_are_folded_into_other_not_dropped(): void
     {
         $this->sub(1, 'active', '2026-01-01 00:00:00', ['utm_source' => 'tiny']);
+        $this->sub(2, 'active', '2026-01-01 00:00:00', ['utm_source' => 'small']);
 
-        $this->assertCount(0, $this->metrics->segmentPerformance('utm_source', 5)['rows']);
+        $rows = $this->metrics->segmentPerformance('utm_source', 5)['rows'];
+
+        // Dropped, they made "still active" add up to less than the Overview.
+        $this->assertCount(1, $rows);
+        $this->assertSame('Other', $rows[0]['segment']);
+        $this->assertSame(2, $rows[0]['rollup']);
+        $this->assertSame(2, $rows[0]['still_active']);
     }
 
     // ------------------------------------------------------------- renewal pipeline

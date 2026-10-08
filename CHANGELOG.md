@@ -42,3 +42,9 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - Cancelled/expired subscriptions with a future end date now go into **Pending cancellation** (`scheduled_cancellations`), alongside WooCommerce's pending-cancel status.
 - The monthly history now runs to the data timestamp rather than stopping at the last order.
 - Note: the 5 subscriptions churned in October on the baseline data are real. Their status notes show pending-cancel → cancelled on 6 Oct, before the 8 Oct import, so they are still counted.
+
+### P1-4: One definition of "Still active"
+- One shared rule, `MetricsService::isActive($sub, $asOf)`: status `active` at the data timestamp (from the imported status history when there is one). Overview, Acquisition and Cohorts all use it.
+- Acquisition no longer drops small segments. They are folded into an **Other** row, and the table has an "All subscriptions" total.
+- Cohort value adds an **Earlier** row for cohorts older than the 12 shown.
+- Baseline: Overview 243, Acquisition 243, Cohorts 243 (were 243, 239 and 241).

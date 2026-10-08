@@ -741,22 +741,7 @@ class MetricsService
     {
         $months = max(1, min(60, $months));
 
-        $holds = $this->holdStarts();
-        $timelines = $this->statusTimelines();
-
-        $subs = $this->subscriptionLifecycle()
-            ->whereNotNull('s.date_created_gmt')
-            ->selectRaw('s.id, s.status, s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended')
-            ->get()
-            ->map(fn ($r) => [
-                'created' => (string) $r->created,
-                'ended' => $r->ended === null ? null : (string) $r->ended,
-                'terminal' => in_array((string) $r->status, self::TERMINAL, true),
-                'active' => (string) $r->status === 'active',
-                'held' => $holds[(int) $r->id]['held'] ?? null,
-                'timeline' => $timelines[(int) $r->id] ?? [],
-            ])
-            ->all();
+        $subs = $this->lifecycleSubs();
 
         if ($subs === []) {
             return ['rows' => [], 'end_date_coverage' => null];
@@ -854,6 +839,68 @@ class MetricsService
     }
 
     /**
+     * THE definition of "still active", for every page: the subscription's
+     * status at $asOf was `active`.
+     *
+     * Overview, Acquisition and Cohorts each used to count it their own way
+     * (a point-in-time snapshot, the live `status` column, and a 12-cohort
+     * window), and showed 243, 239 and 241 for the same book. They all call
+     * this now. Its SQL twin is {@see whereLiveAt()}; both read the imported
+     * status history first and fall back to the export the same way.
+     *
+     * @param  array{created:string, ended:?string, terminal:bool, active:bool, held:?string, timeline:array}  $sub  a row from {@see lifecycleSubs()}
+     */
+    public function isActive(array $sub, string $asOf): bool
+    {
+        return $this->wasActiveAt($sub, $asOf);
+    }
+
+    /**
+     * The whole subscription book, shaped for the in-memory walks: sign-up
+     * and end dates, the estimated hold start and the imported status history.
+     *
+     * @param  array<int, string>  $extra  further `records` columns to carry along
+     * @return array<int, array<string, mixed>> keyed by subscription id
+     */
+    private function lifecycleSubs(array $extra = []): array
+    {
+        $holds = $this->holdStarts();
+        $timelines = $this->statusTimelines();
+
+        $query = $this->subscriptionLifecycle()
+            ->whereNotNull('s.date_created_gmt')
+            ->selectRaw('s.id, s.status, s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended');
+
+        foreach ($extra as $column) {
+            $query->addSelect('s.'.$column);
+        }
+
+        $subs = [];
+
+        foreach ($query->get() as $r) {
+            $id = (int) $r->id;
+            $sub = [
+                'id' => $id,
+                'status' => (string) $r->status,
+                'created' => (string) $r->created,
+                'ended' => $r->ended === null ? null : (string) $r->ended,
+                'terminal' => in_array((string) $r->status, self::TERMINAL, true),
+                'active' => (string) $r->status === 'active',
+                'held' => $holds[$id]['held'] ?? null,
+                'timeline' => $timelines[$id] ?? [],
+            ];
+
+            foreach ($extra as $column) {
+                $sub[$column] = $r->{$column};
+            }
+
+            $subs[$id] = $sub;
+        }
+
+        return $subs;
+    }
+
+    /**
      * Whether a subscription left in [start, end): a terminal status AND an
      * end date that has actually happened. A cancellation scheduled for next
      * month is not churn yet ({@see scheduledCancellations()}).
@@ -905,23 +952,7 @@ class MetricsService
     {
         $months = max(1, min(60, $months));
 
-        $holds = $this->holdStarts();
-        $timelines = $this->statusTimelines();
-
-        $subs = $this->subscriptionLifecycle()
-            ->whereNotNull('s.date_created_gmt')
-            ->selectRaw('s.id, s.status, s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended')
-            ->get()
-            ->map(fn ($r) => [
-                'id' => (int) $r->id,
-                'created' => (string) $r->created,
-                'ended' => $r->ended === null ? null : (string) $r->ended,
-                'terminal' => in_array((string) $r->status, self::TERMINAL, true),
-                'active' => (string) $r->status === 'active',
-                'held' => $holds[(int) $r->id]['held'] ?? null,
-                'timeline' => $timelines[(int) $r->id] ?? [],
-            ])
-            ->all();
+        $subs = $this->lifecycleSubs();
 
         if ($subs === []) {
             return ['rows' => []];
@@ -1078,30 +1109,14 @@ class MetricsService
     {
         $months = max(1, min(60, $months));
 
-        $holds = $this->holdStarts();
-        $timelines = $this->statusTimelines();
-
-        $subs = $this->subscriptionLifecycle()
-            ->whereNotNull('s.date_created_gmt')
-            ->selectRaw('s.id, s.status, s.date_created_gmt as created, s.billing_period, '.
-                's.billing_interval, '.$this->effectiveEndExpr().' as ended')
-            ->get()
-            ->map(fn ($r) => [
-                'id' => (int) $r->id,
-                'created' => (string) $r->created,
-                'ended' => $r->ended === null ? null : (string) $r->ended,
-                'terminal' => in_array((string) $r->status, self::TERMINAL, true),
-                'active' => (string) $r->status === 'active',
-                'held' => $holds[(int) $r->id]['held'] ?? null,
-                'timeline' => $timelines[(int) $r->id] ?? [],
-                // What one month of this subscription is worth, as a share of
-                // whatever it pays per cycle.
-                'monthly_share' => 30 / $this->cycleDays(
-                    $r->billing_period === null ? null : (string) $r->billing_period,
-                    $r->billing_interval === null ? null : (int) $r->billing_interval,
-                ),
-            ])
-            ->all();
+        $subs = array_map(fn (array $sub) => $sub + [
+            // What one month of this subscription is worth, as a share of
+            // whatever it pays per cycle.
+            'monthly_share' => 30 / $this->cycleDays(
+                $sub['billing_period'] === null ? null : (string) $sub['billing_period'],
+                $sub['billing_interval'] === null ? null : (int) $sub['billing_interval'],
+            ),
+        ], $this->lifecycleSubs(['billing_period', 'billing_interval']));
 
         if ($subs === []) {
             return ['rows' => []];
@@ -1208,7 +1223,7 @@ class MetricsService
      * and roughly half of all payers here never get there.
      *
      * @param  string  $dimension  a whitelisted column on the subscription row
-     * @param  int  $min  drop segments smaller than this; they are noise
+     * @param  int  $min  segments smaller than this are folded into one "Other" row
      * @return array{dimension:string, rows:array<int, array<string, mixed>>}
      */
     public function segmentPerformance(string $dimension = 'utm_source', int $min = 5): array
@@ -1216,6 +1231,9 @@ class MetricsService
         if (! in_array($dimension, self::SEGMENT_DIMENSIONS, true)) {
             $dimension = 'utm_source';
         }
+
+        $min = max(1, $min);
+        $asOf = $this->asOfGmt();
 
         // Payments per subscription: the parent order plus every completed
         // renewal. Counting renewals alone would report every one-payment
@@ -1227,54 +1245,106 @@ class MetricsService
             ->selectRaw('subscription_id, COUNT(*) as payments, SUM(total_amount) as revenue')
             ->groupBy('subscription_id');
 
-        $rows = DB::table('records as s')
+        $book = $this->lifecycleSubs([$dimension]);
+
+        $perSub = DB::table('records as s')
             ->leftJoinSub($paid, 'p', 'p.subscription_id', '=', 's.id')
             ->where('s.record_type', 'shop_subscription')
-            ->selectRaw("COALESCE(NULLIF(s.{$dimension}, ''), '(unattributed)') as segment")
-            ->selectRaw('COUNT(*) as subs')
-            ->selectRaw('SUM(CASE WHEN COALESCE(p.payments, 0) = 0 THEN 1 ELSE 0 END) as never_paid')
-            ->selectRaw('SUM(CASE WHEN COALESCE(p.payments, 0) >= 2 THEN 1 ELSE 0 END) as repeat_payers')
-            ->selectRaw("SUM(CASE WHEN s.status = 'active' THEN 1 ELSE 0 END) as still_active")
-            ->selectRaw('SUM(COALESCE(p.revenue, 0)) as revenue')
-            ->groupBy('segment')
-            ->havingRaw('COUNT(*) >= ?', [max(1, $min)])
-            ->orderByDesc('subs')
+            ->selectRaw('s.id, s.'.$dimension.' as segment, COALESCE(p.payments, 0) as payments, COALESCE(p.revenue, 0) as revenue')
             ->get();
+
+        // Group in PHP: "still active" is the shared isActive() rule, which no
+        // single SQL aggregate can express.
+        $groups = [];
+
+        foreach ($perSub as $r) {
+            $label = $this->cleanAttribute($r->segment) ?? '(unattributed)';
+            $sub = $book[(int) $r->id] ?? null;
+
+            $groups[$label] ??= ['subs' => 0, 'never_paid' => 0, 'repeat_payers' => 0, 'still_active' => 0, 'revenue' => 0.0];
+            $g = &$groups[$label];
+            $g['subs']++;
+            $g['never_paid'] += (int) $r->payments === 0 ? 1 : 0;
+            $g['repeat_payers'] += (int) $r->payments >= 2 ? 1 : 0;
+            $g['still_active'] += $sub !== null && $this->isActive($sub, $asOf) ? 1 : 0;
+            $g['revenue'] += (float) $r->revenue;
+            unset($g);
+        }
+
+        // Segments too small to read are folded into one "Other" row rather
+        // than dropped: dropped, they made the "still active" column add up to
+        // less than the active subscriber count on the Overview.
+        $other = ['subs' => 0, 'never_paid' => 0, 'repeat_payers' => 0, 'still_active' => 0, 'revenue' => 0.0];
+        $folded = 0;
+
+        foreach ($groups as $label => $g) {
+            if ($g['subs'] < $min) {
+                foreach ($other as $k => $_) {
+                    $other[$k] += $g[$k];
+                }
+                $folded++;
+                unset($groups[$label]);
+            }
+        }
+
+        uasort($groups, fn ($a, $z) => $z['subs'] <=> $a['subs']);
 
         $out = [];
 
-        foreach ($rows as $r) {
-            $subs = (int) $r->subs;
-            $revenue = (float) $r->revenue;
-
-            $repeatPct = round((int) $r->repeat_payers / $subs * 100, 1);
-            $margin = $this->marginOfError((int) $r->repeat_payers, $subs);
-            $ltv = round($revenue / $subs, 2);
-
-            $out[] = [
-                'segment' => (string) $r->segment,
-                'subs' => $subs,
-                'never_paid' => (int) $r->never_paid,
-                'never_paid_pct' => round((int) $r->never_paid / $subs * 100, 1),
-                'repeat_pct' => $repeatPct,
-                // A rate without its sample size invites acting on noise: at
-                // n = 13 a 69% repeat rate spans roughly 44%-94%.
-                'repeat_margin' => $margin,
-                'repeat_low' => round(max(0, $repeatPct - $margin), 1),
-                'repeat_high' => round(min(100, $repeatPct + $margin), 1),
-                'reliable' => $subs >= (int) config('metrics.segment_min_reliable_n', 30),
-                'still_active' => (int) $r->still_active,
-                'revenue' => round($revenue, 2),
-                'ltv' => $ltv,
-                // Null until a gross margin is configured — LTV is a revenue
-                // number, not a profit one, and guessing the difference is worse
-                // than reporting that nobody has supplied it.
-                'contribution' => $this->contributionFrom($ltv),
-                'payback_ratio' => $this->paybackRatio($ltv),
-            ];
+        foreach ($groups as $label => $g) {
+            $out[] = $this->segmentRow((string) $label, $g);
         }
 
-        return ['dimension' => $dimension, 'rows' => $out];
+        if ($folded > 0) {
+            $out[] = $this->segmentRow('Other', $other) + ['rollup' => $folded];
+        }
+
+        return [
+            'dimension' => $dimension,
+            'rows' => $out,
+            'totals' => [
+                'subs' => array_sum(array_column($out, 'subs')),
+                'still_active' => array_sum(array_column($out, 'still_active')),
+            ],
+        ];
+    }
+
+    /**
+     * One row of {@see segmentPerformance()}.
+     *
+     * @param  array{subs:int, never_paid:int, repeat_payers:int, still_active:int, revenue:float}  $g
+     * @return array<string, mixed>
+     */
+    private function segmentRow(string $segment, array $g): array
+    {
+        $subs = $g['subs'];
+        $revenue = $g['revenue'];
+
+        $repeatPct = round($g['repeat_payers'] / $subs * 100, 1);
+        $margin = $this->marginOfError($g['repeat_payers'], $subs);
+        $ltv = round($revenue / $subs, 2);
+
+        return [
+            'segment' => $segment,
+            'subs' => $subs,
+            'never_paid' => $g['never_paid'],
+            'never_paid_pct' => round($g['never_paid'] / $subs * 100, 1),
+            'repeat_pct' => $repeatPct,
+            // A rate without its sample size invites acting on noise: at
+            // n = 13 a 69% repeat rate spans roughly 44%-94%.
+            'repeat_margin' => $margin,
+            'repeat_low' => round(max(0, $repeatPct - $margin), 1),
+            'repeat_high' => round(min(100, $repeatPct + $margin), 1),
+            'reliable' => $subs >= (int) config('metrics.segment_min_reliable_n', 30),
+            'still_active' => $g['still_active'],
+            'revenue' => round($revenue, 2),
+            'ltv' => $ltv,
+            // Null until a gross margin is configured — LTV is a revenue
+            // number, not a profit one, and guessing the difference is worse
+            // than reporting that nobody has supplied it.
+            'contribution' => $this->contributionFrom($ltv),
+            'payback_ratio' => $this->paybackRatio($ltv),
+        ];
     }
 
     /**
@@ -1659,69 +1729,98 @@ class MetricsService
      */
     public function cohortValue(int $maxCohorts = 12): array
     {
-        $spend = DB::table('records')
+        $spend = [];
+
+        foreach (DB::table('records')
             ->where('record_type', 'shop_order')
             ->where('status', 'completed')
             ->whereNotNull('subscription_id')
             ->selectRaw('subscription_id, SUM(total_amount) as spend')
-            ->groupBy('subscription_id');
+            ->groupBy('subscription_id')
+            ->get() as $r) {
+            $spend[(int) $r->subscription_id] = (float) $r->spend;
+        }
 
-        $subs = $this->subscriptionLifecycle()
-            ->leftJoinSub($spend, 'sp', 'sp.subscription_id', '=', 's.id')
-            ->whereNotNull('s.date_created_gmt')
-            ->selectRaw('s.id, s.status, s.date_created_gmt as created, '.$this->effectiveEndExpr().' as ended, sp.spend')
-            ->get();
-
+        $asOf = $this->asOfGmt();
         $cohorts = [];
 
-        foreach ($subs as $r) {
-            $month = Clock::monthKey((string) $r->created);
-            $terminal = in_array((string) $r->status, self::TERMINAL, true);
+        foreach ($this->lifecycleSubs() as $id => $sub) {
+            $month = Clock::monthKey($sub['created']);
 
             $cohorts[$month] ??= ['size' => 0, 'active' => 0, 'churned' => 0, 'spends' => [], 'tenures' => []];
             $cohorts[$month]['size']++;
-            $cohorts[$month]['spends'][] = (float) ($r->spend ?? 0);
+            $cohorts[$month]['spends'][] = $spend[$id] ?? 0.0;
 
-            if ((string) $r->status === 'active') {
+            if ($this->isActive($sub, $asOf)) {
                 $cohorts[$month]['active']++;
             }
 
-            if ($terminal && $r->ended !== null) {
+            if ($sub['terminal'] && $sub['ended'] !== null) {
                 $cohorts[$month]['churned']++;
                 $cohorts[$month]['tenures'][] = (int) max(0, floor(
-                    CarbonImmutable::parse((string) $r->created)
-                        ->diffInDays(CarbonImmutable::parse((string) $r->ended))
+                    CarbonImmutable::parse($sub['created'])->diffInDays(CarbonImmutable::parse($sub['ended']))
                 ));
             }
         }
 
         krsort($cohorts);
-        $cohorts = array_slice($cohorts, 0, $maxCohorts, true);
+
+        // Cohorts older than the window are summed into one "Earlier" row, so
+        // the "still active" column adds up to the active subscriber count
+        // instead of quietly losing everyone who joined over a year ago.
+        $shown = array_slice($cohorts, 0, $maxCohorts, true);
+        $earlier = array_slice($cohorts, $maxCohorts, null, true);
 
         // A cohort younger than this has not had time to show its true value.
         $cutoff = $this->latestDataInstant()->subMonths(3)->format('Y-m');
 
         $rows = [];
 
-        foreach ($cohorts as $month => $c) {
-            $total = array_sum($c['spends']);
+        foreach ($shown as $month => $c) {
+            $rows[] = $this->cohortValueRow((string) $month, $c) + ['immature' => $month > $cutoff, 'rollup' => false];
+        }
 
-            $rows[] = [
-                'cohort' => $month,
-                'size' => $c['size'],
-                'still_active' => $c['active'],
-                'retained_pct' => $c['size'] > 0 ? round($c['active'] / $c['size'] * 100, 1) : 0.0,
-                'churned' => $c['churned'],
-                'total_spend' => round($total, 2),
-                'value_per_subscriber' => $c['size'] > 0 ? round($total / $c['size'], 2) : 0.0,
-                'median_spend' => $this->medianFloat($c['spends']),
-                'median_tenure_days' => $this->median($c['tenures']),
-                // Too young to judge: still accruing revenue.
-                'immature' => $month > $cutoff,
+        if ($earlier !== []) {
+            $merged = ['size' => 0, 'active' => 0, 'churned' => 0, 'spends' => [], 'tenures' => []];
+
+            foreach ($earlier as $c) {
+                $merged['size'] += $c['size'];
+                $merged['active'] += $c['active'];
+                $merged['churned'] += $c['churned'];
+                array_push($merged['spends'], ...$c['spends']);
+                array_push($merged['tenures'], ...$c['tenures']);
+            }
+
+            $rows[] = $this->cohortValueRow('earlier', $merged) + [
+                'immature' => false,
+                'rollup' => true,
+                'from' => array_key_last($earlier),
+                'to' => array_key_first($earlier),
             ];
         }
 
         return ['rows' => $rows];
+    }
+
+    /**
+     * @param  array{size:int, active:int, churned:int, spends:array<int, float>, tenures:array<int, int>}  $c
+     * @return array<string, mixed>
+     */
+    private function cohortValueRow(string $cohort, array $c): array
+    {
+        $total = array_sum($c['spends']);
+
+        return [
+            'cohort' => $cohort,
+            'size' => $c['size'],
+            'still_active' => $c['active'],
+            'retained_pct' => $c['size'] > 0 ? round($c['active'] / $c['size'] * 100, 1) : 0.0,
+            'churned' => $c['churned'],
+            'total_spend' => round($total, 2),
+            'value_per_subscriber' => $c['size'] > 0 ? round($total / $c['size'], 2) : 0.0,
+            'median_spend' => $this->medianFloat($c['spends']),
+            'median_tenure_days' => $this->median($c['tenures']),
+        ];
     }
 
     /**

@@ -54,7 +54,7 @@ export default (config = {}) => ({
     // Lifetime value by sign-up month (period-independent).
     cohortValue: { rows: [] },
     // Acquisition-segment performance; dimension is user-switchable.
-    segments: { dimension: 'utm_source', rows: [], dimensions: [], loading: false },
+    segments: { dimension: 'utm_source', rows: [], dimensions: [], totals: null, loading: false },
     // The live renewal pipeline.
     renewals: { days: 14, total: 0, at_first_renewal: 0, value: 0, rows: [], loading: false },
     // Campaign audiences: lists you can push straight to Klaviyo.
@@ -238,7 +238,7 @@ export default (config = {}) => ({
                 { headers: { Accept: 'application/json' } });
             if (res.ok) {
                 const d = await res.json();
-                this.segments = { ...this.segments, rows: d.rows ?? [], dimensions: d.dimensions ?? [] };
+                this.segments = { ...this.segments, rows: d.rows ?? [], dimensions: d.dimensions ?? [], totals: d.totals ?? null };
             }
         } catch (_) { /* non-critical */ } finally { this.segments.loading = false; }
     },
@@ -1323,8 +1323,16 @@ export default (config = {}) => ({
     },
 
     cohortMonthLabel(ym) {
-        const [y, m] = ym.split('-');
+        const [y, m] = String(ym).split('-');
+        if (!y || !m) return String(ym);
         return new Date(y, m - 1, 1).toLocaleString(undefined, { month: 'short', year: '2-digit' });
+    },
+
+    /** The rolled-up row of every cohort older than the table shows. */
+    earlierCohortLabel(row) {
+        return row.from && row.to
+            ? `Earlier (${this.cohortMonthLabel(row.from)} – ${this.cohortMonthLabel(row.to)})`
+            : 'Earlier';
     },
 
     // --- reporting ---
