@@ -88,3 +88,7 @@ All notable changes to Hurayra Analytics. One entry per audit task
 
 ### P2-2: Overview renewals card headline
 - The card now leads with the total and value ("99 renewals · £2,277.90" on the baseline for the next 14 days), with "42 at first renewal" as the subline. The first-renewal count alone was being read as the total.
+
+### P2-3: Campaign lists grouped by customer
+- Campaign lists have one row per customer (billing email, falling back to customer ID), with a subscription count per row. The header uses the real customer count, and the subscription total is shown beside it when they differ.
+- Baseline: Cross-sell reads "136 customers (148 subscriptions)" instead of "148 customers". The CSV export lists each customer once.

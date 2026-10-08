@@ -1458,12 +1458,17 @@ class MetricsService
      */
     public function audience(string $audience, ?int $limit = 500): array
     {
-        $rows = match ($audience) {
+        $subRows = match ($audience) {
             'win_back' => $this->winBackAudience(),
             'never_subscribed' => $this->neverSubscribedAudience(),
             'partial_churn' => $this->partialChurnAudience(),
             default => $this->crossSellAudience(),
         };
+
+        // One row per CUSTOMER. A household with two single-flavour plans is
+        // one upgrade conversation, not two, and the header said "148
+        // customers" over a list of subscriptions with repeated emails.
+        $rows = $this->groupAudienceByCustomer($subRows);
 
         // Warmest first: what they have already spent is the best available
         // proxy for how likely the next conversation is to land.
@@ -1472,9 +1477,59 @@ class MetricsService
         return [
             'audience' => $audience,
             'total' => count($rows),
+            'subscriptions' => count(array_filter($subRows, fn ($r) => $r['subscription_id'] !== null)),
             'value' => round(array_sum(array_column($rows, 'value')), 2),
             'rows' => $limit === null ? $rows : array_slice($rows, 0, $limit),
         ];
+    }
+
+    /**
+     * Merge audience rows that belong to the same customer (billing email,
+     * falling back to customer id), keeping a count of their subscriptions.
+     *
+     * @param  array<int, array<string, mixed>>  $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private function groupAudienceByCustomer(array $rows): array
+    {
+        $out = [];
+
+        foreach ($rows as $r) {
+            $key = $this->customerKey($r['customer'] ?? null, (int) ($r['customer_id'] ?? 0))
+                ?? 'sub:'.($r['subscription_id'] ?? count($out));
+
+            if (! isset($out[$key])) {
+                $out[$key] = $r + ['subscription_ids' => []];
+                $out[$key]['details'] = [];
+                $out[$key]['cycles'] = [];
+            } else {
+                $out[$key]['payments'] += $r['payments'];
+                $out[$key]['value'] = round($out[$key]['value'] + $r['value'], 2);
+                // The soonest date is the one to act on.
+                if ($r['next_at'] !== null && ($out[$key]['next_at'] === null || $r['next_at'] < $out[$key]['next_at'])) {
+                    $out[$key]['next_at'] = $r['next_at'];
+                }
+            }
+
+            if ($r['subscription_id'] !== null) {
+                $out[$key]['subscription_ids'][] = $r['subscription_id'];
+            }
+            if ($r['detail'] !== null) {
+                $out[$key]['details'][$r['detail']] = true;
+            }
+            if ($r['cycle'] !== null) {
+                $out[$key]['cycles'][$r['cycle']] = true;
+            }
+        }
+
+        return array_values(array_map(function (array $r) {
+            $r['subscriptions'] = count($r['subscription_ids']);
+            $r['detail'] = $r['details'] === [] ? null : implode(' · ', array_keys($r['details']));
+            $r['cycle'] = $r['cycles'] === [] ? null : implode(' · ', array_keys($r['cycles']));
+            unset($r['details'], $r['cycles']);
+
+            return $r;
+        }, $out));
     }
 
     /** Live single-flavour subscribers — the Combo upgrade conversation. */
@@ -1511,6 +1566,7 @@ class MetricsService
 
             $out[] = [
                 'customer' => $r->billing_email,
+                'customer_id' => (int) ($r->customer_id ?? 0),
                 'subscription_id' => (int) $r->id,
                 'detail' => $name,
                 'cycle' => $this->cycleLabel($r->billing_period, $r->billing_interval),

@@ -238,11 +238,11 @@ class MetricsController extends Controller
 
         return response()->streamDownload(function () use ($data) {
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['Customer', 'Subscription ID', 'Detail', 'Cycle', 'Date', 'Payments', 'Lifetime spend']);
+            fputcsv($out, ['Customer', 'Subscriptions', 'Subscription IDs', 'Detail', 'Cycle', 'Date', 'Payments', 'Lifetime spend']);
 
             foreach ($data['rows'] as $r) {
                 fputcsv($out, [
-                    $r['customer'], $r['subscription_id'] ?? '', $r['detail'] ?? '',
+                    $r['customer'], $r['subscriptions'], implode(' ', $r['subscription_ids']), $r['detail'] ?? '',
                     $r['cycle'] ?? '', $r['next_at'] ?? '', $r['payments'], $r['value'],
                 ]);
             }

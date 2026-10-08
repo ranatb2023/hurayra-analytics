@@ -71,4 +71,31 @@ class LabelsTest extends TestCase
         $this->assertStringContainsString('money(renewals.value)', $headline);
         $this->assertStringContainsString('at first renewal', $html);
     }
+
+    // ---- P2-3 ---------------------------------------------------------------
+
+    public function test_campaign_lists_have_one_row_per_customer(): void
+    {
+        // One household, two single-flavour plans; another with one.
+        foreach ([[1, 'home@example.test'], [2, 'home@example.test'], [3, 'solo@example.test']] as [$id, $email]) {
+            $this->sub($id, 'active', ['billing_email' => $email, 'customer_id' => 40 + $id]);
+            Record::create([
+                'id' => 100 + $id, 'import_id' => null, 'record_type' => 'shop_order', 'status' => 'completed',
+                'date_created_gmt' => '2026-09-01 10:00:00', 'total_amount' => 20, 'subscription_id' => $id,
+                'order_relationship' => 'parent', 'billing_email' => $email, 'primary_product' => 'Chicken (HPF001)',
+            ]);
+        }
+
+        $a = (new MetricsService)->audience('cross_sell');
+
+        $this->assertSame(2, $a['total']);          // customers, for the header
+        $this->assertSame(3, $a['subscriptions']);
+        $home = collect($a['rows'])->firstWhere('customer', 'home@example.test');
+        $this->assertSame(2, $home['subscriptions']);
+        $this->assertSame([1, 2], $home['subscription_ids']);
+        $this->assertSame(40.0, $home['value']);
+
+        $csv = $this->get('/api/metrics/audience/export?audience=cross_sell')->streamedContent();
+        $this->assertSame(1, substr_count($csv, 'home@example.test'));
+    }
 }

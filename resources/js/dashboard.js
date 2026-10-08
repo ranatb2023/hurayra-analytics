@@ -60,7 +60,7 @@ export default (config = {}) => ({
     // The live renewal pipeline.
     renewals: { days: 14, total: 0, at_first_renewal: 0, value: 0, rows: [], failed: { total: 0, value: 0, rows: [] }, loading: false },
     // Campaign audiences: lists you can push straight to Klaviyo.
-    audience: { key: 'cross_sell', label: '', total: 0, value: 0, rows: [], audiences: {}, loading: false },
+    audience: { key: 'cross_sell', label: '', total: 0, subscriptions: 0, value: 0, rows: [], audiences: {}, loading: false },
     // Month-by-month subscriber history. Fixed once a month closes — a later
     // cancellation moves that month's row, never the ones before it.
     churn: { rows: [], coverage: null },
@@ -284,7 +284,7 @@ export default (config = {}) => ({
             if (res.ok) {
                 const d = await res.json();
                 this.audience = { ...this.audience, label: d.label ?? '', total: d.total ?? 0,
-                    value: d.value ?? 0, rows: d.rows ?? [], audiences: d.audiences ?? {} };
+                    subscriptions: d.subscriptions ?? 0, value: d.value ?? 0, rows: d.rows ?? [], audiences: d.audiences ?? {} };
             }
         } catch (_) { /* non-critical */ } finally { this.audience.loading = false; }
     },

@@ -1031,7 +1031,9 @@
             <div class="min-w-0">
                 <h3 class="text-sm font-bold text-slate-700" x-text="audience.label || 'Campaign lists'"></h3>
                 <p class="mt-1 text-xs text-slate-500">
-                    <span class="font-bold text-slate-700" x-text="audience.total"></span> customers ·
+                    <span class="font-bold text-slate-700" x-text="audience.total"></span> customers
+                    <span x-show="audience.subscriptions > audience.total" class="text-slate-400">
+                        (<span x-text="audience.subscriptions"></span> subscriptions)</span> ·
                     <span class="font-bold text-slate-700" x-text="money(audience.value)"></span> of lifetime spend
                     between them. Sorted by what they have already spent, warmest first.
                 </p>
@@ -1061,6 +1063,7 @@
                 <thead class="sticky top-0 bg-slate-50/95 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 backdrop-blur">
                     <tr>
                         <th class="px-5 py-2.5">Customer</th>
+                        <th class="px-5 py-2.5 text-right">Subs</th>
                         <th class="px-5 py-2.5">Detail</th>
                         <th class="px-5 py-2.5">Cycle</th>
                         <th class="px-5 py-2.5 text-right">Payments</th>
@@ -1068,9 +1071,12 @@
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
-                    <template x-for="r in audience.rows" :key="`${audience.key}-${r.customer}-${r.subscription_id}`">
+                    <template x-for="r in audience.rows" :key="`${audience.key}-${r.customer}`">
                         <tr class="transition hover:bg-slate-50/60">
                             <td class="max-w-[240px] truncate px-5 py-2.5 text-slate-700" x-text="r.customer"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums text-slate-500"
+                                :title="(r.subscription_ids || []).map((id) => `#${id}`).join(', ')"
+                                x-text="r.subscriptions || '—'"></td>
                             <td class="max-w-[240px] truncate px-5 py-2.5 text-slate-500" x-text="r.detail || '—'"></td>
                             <td class="whitespace-nowrap px-5 py-2.5 text-xs text-slate-400" x-text="r.cycle || '—'"></td>
                             <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="r.payments"></td>
