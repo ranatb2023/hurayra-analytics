@@ -361,14 +361,24 @@
                             class="shrink-0 text-xs font-semibold text-slate-400 transition hover:text-slate-700">All →</button>
                 </div>
                 <div class="max-h-72 overflow-y-auto px-5 py-3">
+                    {{-- Same rule as the Acquisition page: under 30 eligible
+                         subscriptions a rate is too noisy to act on (fb at
+                         n = 13 read 69.2%), so it is greyed and labelled. --}}
                     <template x-for="r in segments.rows.slice(0, 6)" :key="r.segment">
-                        <div class="flex items-center gap-3 py-1.5">
-                            <span class="w-28 shrink-0 truncate text-xs font-medium text-slate-600" x-text="r.segment"></span>
+                        <div class="flex items-center gap-3 py-1.5" data-segment-row
+                             :class="r.reliable ? '' : 'opacity-50'"
+                             :title="r.reliable ? '' : `Only ${r.eligible} subscriptions old enough to judge — too few to act on`">
+                            <span class="w-28 shrink-0 truncate text-xs font-medium text-slate-600">
+                                <span x-text="r.segment"></span>
+                                <span x-show="! r.reliable" class="ml-1 text-[10px] font-semibold text-amber-700">n too small</span>
+                            </span>
                             <span class="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
-                                <span class="block h-full rounded-full bg-linear-to-r from-sky-400 to-indigo-500"
+                                <span class="block h-full rounded-full"
+                                      :class="r.reliable ? 'bg-linear-to-r from-sky-400 to-indigo-500' : 'bg-slate-300'"
                                       :style="`width: ${repeatBarWidth(r.repeat_pct)}`"></span>
                             </span>
-                            <span class="w-10 shrink-0 text-right text-xs font-semibold tabular-nums text-slate-700"
+                            <span class="w-10 shrink-0 text-right text-xs font-semibold tabular-nums"
+                                  :class="r.reliable ? 'text-slate-700' : 'text-slate-400'"
                                   x-text="r.repeat_pct === null ? '—' : `${r.repeat_pct}%`"></span>
                             <span class="w-14 shrink-0 text-right text-xs tabular-nums text-slate-400" x-text="money(r.ltv)"></span>
                         </div>

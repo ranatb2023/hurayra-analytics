@@ -92,3 +92,6 @@ All notable changes to Hurayra Analytics. One entry per audit task
 ### P2-3: Campaign lists grouped by customer
 - Campaign lists have one row per customer (billing email, falling back to customer ID), with a subscription count per row. The header uses the real customer count, and the subscription total is shown beside it when they differ.
 - Baseline: Cross-sell reads "136 customers (148 subscriptions)" instead of "148 customers". The CSV export lists each customer once.
+
+### P2-4: Small samples on the Overview acquisition card
+- The Overview "Where subscribers come from" card applies the same n < 30 rule as the Acquisition page. Small segments (fb at n = 13) are greyed out and marked "n too small".

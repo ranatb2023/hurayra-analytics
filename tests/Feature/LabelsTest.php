@@ -98,4 +98,20 @@ class LabelsTest extends TestCase
         $csv = $this->get('/api/metrics/audience/export?audience=cross_sell')->streamedContent();
         $this->assertSame(1, substr_count($csv, 'home@example.test'));
     }
+
+    // ---- P2-4 ---------------------------------------------------------------
+
+    public function test_overview_acquisition_card_greys_out_small_samples(): void
+    {
+        $this->sub(1, 'active', ['utm_source' => 'fb', 'date_created_gmt' => '2026-01-01 10:00:00']);
+
+        $row = (new MetricsService)->segmentPerformance('utm_source', 1)['rows'][0];
+        $this->assertFalse($row['reliable']); // n = 1 < 30
+
+        $html = $this->get('/')->assertOk()->getContent();
+        $card = substr($html, strpos($html, 'data-segment-row'), 900);
+
+        $this->assertStringContainsString("r.reliable ? '' : 'opacity-50'", $card);
+        $this->assertStringContainsString('n too small', $card);
+    }
 }
