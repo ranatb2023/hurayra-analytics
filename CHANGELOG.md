@@ -76,3 +76,8 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - A one-time purchase is now always a **completed** order worth **more than £0**. Customers whose only one-time order was free or unpaid no longer appear.
 - A conversion needs the subscription to start at least one UK calendar day after the first one-time purchase. An **Include same-day sign-ups** toggle restores the old reading. It replaces the "Completed one-time orders only" toggle, which is now always on.
 - Baseline: 17.3% → 17.0% (171 of 1,004).
+
+### P1-11: Renewal pipeline uses live status
+- The pipeline lists only subscriptions that are **active** now, with a next payment (WooCommerce `_schedule_next_payment`) inside the window. No on-hold subscription appears in it.
+- Subscriptions whose first renewal failed (on hold, paid exactly once) move to a separate **Failed first renewal** list with the date they went on hold, and can be exported.
+- Baseline, next 14 days: 99 renewals, all active (was 105 including on-hold); 23 failed first renewals worth £614 per cycle.

@@ -58,7 +58,7 @@ export default (config = {}) => ({
     // Acquisition-segment performance; dimension is user-switchable.
     segments: { dimension: 'utm_source', rows: [], dimensions: [], totals: null, loading: false },
     // The live renewal pipeline.
-    renewals: { days: 14, total: 0, at_first_renewal: 0, value: 0, rows: [], loading: false },
+    renewals: { days: 14, total: 0, at_first_renewal: 0, value: 0, rows: [], failed: { total: 0, value: 0, rows: [] }, loading: false },
     // Campaign audiences: lists you can push straight to Klaviyo.
     audience: { key: 'cross_sell', label: '', total: 0, value: 0, rows: [], audiences: {}, loading: false },
     // Month-by-month subscriber history. Fixed once a month closes — a later
@@ -269,7 +269,8 @@ export default (config = {}) => ({
             if (res.ok) {
                 const d = await res.json();
                 this.renewals = { ...this.renewals, total: d.total ?? 0, at_first_renewal: d.at_first_renewal ?? 0,
-                    value: d.value ?? 0, rows: d.rows ?? [] };
+                    value: d.value ?? 0, rows: d.rows ?? [],
+                    failed: d.failed_first_renewal ?? { total: 0, value: 0, rows: [] } };
             }
         } catch (_) { /* non-critical */ } finally { this.renewals.loading = false; }
     },
@@ -290,6 +291,11 @@ export default (config = {}) => ({
 
     audienceExportHref() {
         return `/api/metrics/audience/export?audience=${this.audience.key}`;
+    },
+
+    /** An attribution value for display; blank means none was recorded. */
+    sourceLabel(v) {
+        return v === null || v === undefined || v === '' ? '—' : String(v);
     },
 
     /** Currency, or an em dash when the figure has not been supplied. */

@@ -866,8 +866,8 @@
                     are at their <span class="font-semibold">first</span> renewal, the one half of subscribers never survive.
                 </p>
                 <p class="mt-1 text-[11px] text-slate-400">
-                    Each subscription appears <em>once</em>, at its next scheduled payment — this is a work list, not a
-                    cash forecast. A forecast would project each cycle repeatedly across the window.
+                    Active subscriptions only, at their next scheduled payment (WooCommerce's Next Payment date), counted
+                    from today. Each appears <em>once</em> — this is a work list, not a cash forecast.
                 </p>
             </div>
             <div class="no-print flex items-center gap-1">
@@ -910,6 +910,54 @@
                             <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="r.payments_so_far"></td>
                             <td class="px-5 py-2.5 text-right font-semibold tabular-nums text-slate-900" x-text="money(r.amount)"></td>
                             <td class="max-w-[160px] truncate px-5 py-2.5 text-xs text-slate-400" x-text="r.source || '—'"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {{-- Not in the pipeline: their first renewal already failed and they are on
+         hold. WooCommerce still holds a next-payment date for them, which is
+         how they used to appear above as "renews today". --}}
+    <div class="mt-4 print-block overflow-hidden rounded-2xl border border-amber-200/80 bg-white shadow-sm"
+         x-show="renewals.failed.total > 0" x-cloak>
+        <div class="flex flex-wrap items-start justify-between gap-3 border-b border-amber-100 bg-amber-50/50 p-5">
+            <div>
+                <h3 class="text-sm font-bold text-slate-700">Failed first renewal</h3>
+                <p class="mt-1 text-xs text-slate-500">
+                    <span class="font-bold text-amber-700" x-text="renewals.failed.total"></span> subscriptions paid once,
+                    then went on hold when the first renewal failed — worth
+                    <span class="font-bold text-slate-700" x-text="money(renewals.failed.value)"></span> per cycle.
+                    Not counted in the pipeline above.
+                </p>
+            </div>
+            <a :href="`${renewalsExportHref()}&list=failed_first_renewal`"
+               class="no-print inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50">
+                Export CSV
+            </a>
+        </div>
+        <div class="max-h-96 overflow-auto">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-50/70 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <tr>
+                        <th class="px-5 py-2.5">Subscription</th>
+                        <th class="px-5 py-2.5">Customer</th>
+                        <th class="px-5 py-2.5">First paid</th>
+                        <th class="px-5 py-2.5">On hold since</th>
+                        <th class="px-5 py-2.5 text-right">Amount</th>
+                        <th class="px-5 py-2.5">Source</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    <template x-for="r in renewals.failed.rows" :key="r.id">
+                        <tr class="transition hover:bg-slate-50/60">
+                            <td class="whitespace-nowrap px-5 py-2.5 font-mono text-xs font-semibold text-slate-700" x-text="`#${r.id}`"></td>
+                            <td class="max-w-[220px] truncate px-5 py-2.5 text-slate-600" x-text="r.customer || '—'"></td>
+                            <td class="whitespace-nowrap px-5 py-2.5 text-slate-500" x-text="shortDate(r.first_paid_at)"></td>
+                            <td class="whitespace-nowrap px-5 py-2.5 text-slate-500" x-text="shortDate(r.held_at)"></td>
+                            <td class="px-5 py-2.5 text-right font-semibold tabular-nums text-slate-900" x-text="money(r.amount)"></td>
+                            <td class="max-w-[160px] truncate px-5 py-2.5 text-xs text-slate-400" x-text="sourceLabel(r.source)"></td>
                         </tr>
                     </template>
                 </tbody>

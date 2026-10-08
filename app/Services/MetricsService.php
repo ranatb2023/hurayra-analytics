@@ -1690,15 +1690,18 @@ class MetricsService
     }
 
     /**
-     * Live subscriptions whose next payment is due inside the window ahead.
+     * Subscriptions active right now ({@see isActive()}) whose next payment is
+     * due inside the window ahead.
      *
-     * `next_payment_at` is scheduled by WooCommerce, so this is the actual
-     * renewal pipeline rather than an inference. Subscribers who have paid only
-     * once are flagged: half of all payers never reach a second payment, which
-     * makes that renewal the one worth intervening on.
+     * `next_payment_at` is WooCommerce's `_schedule_next_payment`, so this is
+     * the actual renewal pipeline rather than an inference. Subscribers who
+     * have paid only once are flagged: half of all payers never reach a second
+     * payment, which makes that renewal the one worth intervening on. Ones
+     * whose first renewal already failed are on hold, not in the pipeline,
+     * and are returned separately as `failed_first_renewal`.
      *
      * @param  int  $days  how far ahead to look
-     * @return array{total:int, at_first_renewal:int, value:float, rows:array<int, array<string, mixed>>}
+     * @return array{total:int, at_first_renewal:int, value:float, rows:array<int, array<string, mixed>>, failed_first_renewal:array{total:int, value:float, rows:array<int, array<string, mixed>>}}
      */
     public function upcomingRenewals(int $days = 14, ?int $limit = 200): array
     {
@@ -1706,6 +1709,8 @@ class MetricsService
         // export put every renewal a week further out than WooCommerce does.
         $now = Clock::now();
         $today = $now->startOfDay();
+        $asOf = $this->asOfGmt();
+        $book = $this->lifecycleSubs();
 
         $paid = DB::table('records')
             ->where('record_type', 'shop_order')
@@ -1714,7 +1719,7 @@ class MetricsService
             ->selectRaw('subscription_id, COUNT(*) as payments, MAX(total_amount) as amount')
             ->groupBy('subscription_id');
 
-        $query = DB::table('records as s')
+        $all = DB::table('records as s')
             ->leftJoinSub($paid, 'p', 'p.subscription_id', '=', 's.id')
             ->where('s.record_type', 'shop_subscription')
             ->whereNotIn('s.status', self::TERMINAL)
@@ -1724,9 +1729,13 @@ class MetricsService
             ->selectRaw('s.id, s.billing_email, s.customer_id, s.status, s.next_payment_at')
             ->selectRaw('s.utm_source, s.billing_period, s.billing_interval')
             ->selectRaw('COALESCE(p.payments, 0) as payments, COALESCE(p.amount, 0) as amount')
-            ->orderBy('s.next_payment_at');
-
-        $all = $query->get();
+            ->orderBy('s.next_payment_at')
+            ->get()
+            // Live status only. A subscription whose first renewal already
+            // failed is on hold: WooCommerce still carries its next-payment
+            // date, but it is not going to "renew today" -- it is listed in
+            // failedFirstRenewals() instead.
+            ->filter(fn ($r) => isset($book[(int) $r->id]) && $this->isActive($book[(int) $r->id], $asOf));
 
         $rows = [];
         foreach ($all as $r) {
@@ -1735,7 +1744,7 @@ class MetricsService
             $rows[] = [
                 'id' => (int) $r->id,
                 'customer' => $r->billing_email ?: ($r->customer_id > 0 ? 'Customer #'.$r->customer_id : null),
-                'status' => (string) $r->status,
+                'status' => 'active',
                 'due_at' => (string) $r->next_payment_at,
                 // Calendar days in UK time, the way WooCommerce's Next Payment
                 // column reads: due at 09:00 tomorrow is "in 1d", not "today".
@@ -1750,13 +1759,97 @@ class MetricsService
         }
 
         $firsts = array_filter($rows, fn ($r) => $r['first_renewal']);
+        $failed = $this->failedFirstRenewals($book, $asOf);
 
         return [
             'total' => count($rows),
             'at_first_renewal' => count($firsts),
             'value' => round(array_sum(array_column($rows, 'amount')), 2),
             'rows' => $limit === null ? $rows : array_slice($rows, 0, $limit),
+            'failed_first_renewal' => [
+                'total' => count($failed),
+                'value' => round(array_sum(array_column($failed, 'amount')), 2),
+                'rows' => $limit === null ? $failed : array_slice($failed, 0, $limit),
+            ],
         ];
+    }
+
+    /**
+     * Subscriptions on hold at $asOf that have paid exactly once: their first
+     * renewal failed. The save list for the renewal that decides whether a
+     * sign-up becomes a customer. Most recently held first.
+     *
+     * @param  array<int, array<string, mixed>>  $book  from {@see lifecycleSubs()}
+     * @return array<int, array<string, mixed>>
+     */
+    private function failedFirstRenewals(array $book, string $asOf): array
+    {
+        $onHold = array_filter($book, fn (array $sub) => ($this->statusFromTimeline($sub['timeline'], $asOf) ?? $sub['status']) === 'on-hold');
+
+        if ($onHold === []) {
+            return [];
+        }
+
+        $paid = [];
+        foreach (DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('status', 'completed')
+            ->whereIn('subscription_id', array_keys($onHold))
+            ->selectRaw('subscription_id, COUNT(*) as payments, MAX(total_amount) as amount, MAX(date_created_gmt) as paid_at')
+            ->groupBy('subscription_id')
+            ->get() as $p) {
+            $paid[(int) $p->subscription_id] = $p;
+        }
+
+        $details = DB::table('records')
+            ->whereIn('id', array_keys($onHold))
+            ->get(['id', 'billing_email', 'customer_id', 'utm_source', 'next_payment_at'])
+            ->keyBy('id');
+
+        $rows = [];
+        foreach ($onHold as $id => $sub) {
+            if ((int) ($paid[$id]->payments ?? 0) !== 1) {
+                continue;
+            }
+
+            $d = $details[$id];
+            $heldAt = $this->lastChangeTo($sub['timeline'], 'on-hold', $asOf) ?? $sub['held'];
+
+            $rows[] = [
+                'id' => $id,
+                'customer' => $d->billing_email ?: ($d->customer_id > 0 ? 'Customer #'.$d->customer_id : null),
+                'held_at' => $heldAt,
+                'was_due_at' => $d->next_payment_at,
+                'first_paid_at' => (string) $paid[$id]->paid_at,
+                'amount' => round((float) $paid[$id]->amount, 2),
+                'source' => $d->utm_source,
+            ];
+        }
+
+        usort($rows, fn ($a, $z) => strcmp((string) $z['held_at'], (string) $a['held_at']));
+
+        return $rows;
+    }
+
+    /**
+     * When a timeline last moved into $status before $instant, or null.
+     *
+     * @param  array<int, array{at:string, from:string, to:string}>  $timeline
+     */
+    private function lastChangeTo(array $timeline, string $status, string $instant): ?string
+    {
+        $at = null;
+
+        foreach ($timeline as $change) {
+            if ($change['at'] >= $instant) {
+                break;
+            }
+            if ($change['to'] === $status) {
+                $at = $change['at'];
+            }
+        }
+
+        return $at;
     }
 
     /**

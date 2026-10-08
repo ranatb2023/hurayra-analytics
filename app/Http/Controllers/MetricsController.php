@@ -172,11 +172,25 @@ class MetricsController extends Controller
         ));
     }
 
-    /** Download the renewal pipeline as a campaign audience. */
+    /** Download the renewal pipeline (or its failed-first-renewal list) as a campaign audience. */
     public function upcomingRenewalsExport(Request $request): StreamedResponse
     {
         $days = min(90, max(1, (int) $request->integer('days', 14)));
         $data = $this->metrics->upcomingRenewals($days, limit: null);
+
+        if ($request->string('list')->toString() === 'failed_first_renewal') {
+            return response()->streamDownload(function () use ($data) {
+                $out = fopen('php://output', 'w');
+                fputcsv($out, ['Subscription ID', 'Customer', 'First paid', 'On hold since', 'Was due', 'Amount', 'Source']);
+
+                foreach ($data['failed_first_renewal']['rows'] as $r) {
+                    fputcsv($out, [
+                        $r['id'], $r['customer'] ?? '', $r['first_paid_at'], $r['held_at'] ?? '',
+                        $r['was_due_at'] ?? '', $r['amount'], $r['source'] ?? '',
+                    ]);
+                }
+            }, 'hurayra-failed-first-renewal.csv', ['Content-Type' => 'text/csv']);
+        }
 
         return response()->streamDownload(function () use ($data) {
             $out = fopen('php://output', 'w');
