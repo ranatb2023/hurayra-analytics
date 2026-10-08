@@ -38,55 +38,66 @@
 
     // --- Subscriptions: what moved during the period, then live states -------
     $flowCards = [
-        'new_subscribers' => $M('New Subscribers', $icons['user_plus'], 1, 'good', "'joined during this period'"),
+        'new_subscribers' => $M('New Subscribers', $icons['user_plus'], 1, 'good', "'joined during this period'",
+            'New Subscribers = subscriptions created during the period (UK dates), whatever their status now.'),
         'churned_in_period' => $M('Subscribers Lost', $icons['x_circle'], 1, 'bad', "'ended during this period'",
-            'Every subscription whose end date falls inside this period, whenever it signed up. This is the churn numerator.'),
+            'Subscribers Lost = cancelled or expired subscriptions whose end date falls inside the period and has already happened, whenever they signed up. The churn numerator.'),
         'subscribers_active' => $M('Active Subscribers', $icons['users'], 1, 'good', 'periodEndNote()',
-            'Status active at a single instant — the period end. A subscription now On Hold still counts as active in the months before it went on hold (estimated as one billing cycle after its last payment). Pending Cancellation is a separate state and is not included. Run php artisan subs:explain {YYYY-MM} to reconcile against another report.'),
+            'Active Subscribers = subscriptions whose status was active at one instant: the period end, or the data timestamp if that is earlier. Read from the status history where there is one. Pending cancellation is a separate state and is not included. Run php artisan subs:explain {YYYY-MM} to reconcile against another report.'),
     ];
     $stateChips = [
         'on_hold' => $M('On Hold', $icons['pause'], 2, 'bad', 'onHoldNote()',
-            'A live state with no history in the source data, so it is read as-is at the period end.'),
+            'On Hold = subscriptions whose status was on-hold at the period end (or data timestamp), from the status history, or estimated as one billing cycle after the last payment where there is none.'),
         'awaiting_payment' => $M('Awaiting payment', $icons['clock'], 2, 'flat', 'periodEndNote()',
             'Awaiting payment = subscriptions in WooCommerce\'s "pending" status: created, first payment not taken yet. Not the same as Pending cancellation.'),
         'pending_cancellation' => $M('Pending cancellation', $icons['clock'], 2, 'bad', 'periodEndNote()',
             'Pending cancellation = subscriptions in WooCommerce\'s pending-cancel status + cancelled/expired subscriptions whose end date is still in the future. Neither has churned yet.'),
         'failed_signups' => $M('Failed Sign-ups', $icons['exclaim'], 2, 'bad', "'never ordered'",
-            'A subset of Subscribers Lost: subscriptions that ended having never completed an order. A checkout defect, not churn — they cost no revenue. Churn · Real excludes them.'),
+            'Failed Sign-ups = Subscribers Lost with no completed order ever. A checkout defect, not churn: they cost no revenue. Churn · Real excludes them.'),
     ];
     // This period's SIGN-UPS followed to today. Answers "did this intake
     // stick?", never "who left this month" — the mistake this dashboard invites.
     $signupCohortCards = [
-        'cancelled_without_purchase' => $M('Cancelled · No Purchase', $icons['x_circle'], 2, 'bad', "'never completed an order'"),
-        'cancelled_with_purchase' => $M('Cancelled · Purchased', $icons['check_badge'], 2, 'bad', "'ordered at least once'"),
+        'cancelled_without_purchase' => $M('Cancelled · No Purchase', $icons['x_circle'], 2, 'bad', "'never completed an order'",
+            'Cancelled · No Purchase = subscriptions created in the period, cancelled now, with no completed order linked to them at any time.'),
+        'cancelled_with_purchase' => $M('Cancelled · Purchased', $icons['check_badge'], 2, 'bad', "'ordered at least once'",
+            'Cancelled · Purchased = subscriptions created in the period, cancelled now, with at least one completed order linked to them at any time.'),
     ];
 
     $orderCards = [
-        'completed' => $M('Completed', $icons['check_circle'], 1, 'good'),
-        'subscription_purchases' => $M('Subscription Purchases', $icons['arrow_path'], 1, 'good'),
+        'completed' => $M('Completed', $icons['check_circle'], 1, 'good', null,
+            'Completed = orders created in the period with status completed.'),
+        'subscription_purchases' => $M('Subscription Purchases', $icons['arrow_path'], 1, 'good', null,
+            'Subscription Purchases = orders created in the period that are a subscription parent or renewal order, in any real order status.'),
     ];
     $orderChips = [
-        'one_time_purchase' => $M('One-time Purchase', $icons['bag'], 2, 'good'),
-        'renewal_purchases' => $M('Renewal Purchases', $icons['arrow_path'], 2, 'good'),
-        'new_not_completed' => $M('New (not completed)', $icons['exclaim'], 2, 'bad'),
+        'one_time_purchase' => $M('One-time Purchase', $icons['bag'], 2, 'good', null,
+            'One-time Purchase = orders created in the period not linked to any subscription, in any real order status.'),
+        'renewal_purchases' => $M('Renewal Purchases', $icons['arrow_path'], 2, 'good', null,
+            'Renewal Purchases = subscription renewal orders created in the period, in any real order status.'),
+        'new_not_completed' => $M('New (not completed)', $icons['exclaim'], 2, 'bad', null,
+            'New (not completed) = orders created in the period with a real order status other than completed. Strict = pending + processing only.'),
     ];
 
     $totalCards = [
         'total_revenue' => $M('Revenue · Gross', $icons['dollar'], 1, 'good', "'includes VAT and shipping'",
-            'Completed orders at their full charged amount. VAT and shipping are roughly a quarter of this and are not yours to keep — see the breakdown below.'),
+            'Revenue · Gross = Σ total charged on completed orders created in the period. VAT and shipping are roughly a quarter of this and are not yours to keep — see the breakdown below.'),
         'net_revenue_after_refunds' => $M('Revenue · Net', $icons['dollar'], 1, 'good', "'after VAT, shipping and refunds'",
-            'What the business actually keeps: gross less VAT, less shipping, less refunds. Every LTV and ARPU figure elsewhere is built on gross and is therefore about a third higher than this.'),
+            'Revenue · Net = Σ net (ex VAT, ex shipping) − Σ refunded, on completed orders created in the period. What the business keeps. Every LTV and ARPU figure elsewhere is built on gross and is therefore about a third higher.'),
         'mrr' => $M('MRR', $icons['arrow_path'], 1, 'good', "'recurring, normalised to 30 days'",
-            'Every active subscription priced at its most recent payment and normalised to a month by its own billing cycle.'),
+            'MRR = Σ over active, billed subscriptions of (last completed payment × 30 ÷ billing-cycle days), at the period end or data timestamp.'),
     ];
     $totalChips = [
         'arr' => $M('ARR', $icons['arrow_path'], 2, 'good', null,
             'ARR = MRR × 12, using the MRR shown (to the penny). A run rate, not a forecast — it assumes today\'s book bills unchanged for a year.'),
         'arpu' => $M('ARPU · per paying subscriber', $icons['users'], 2, 'good', 'arpuNote()',
             'ARPU = MRR ÷ paying subscribers (active and billed at least once). Active subscriptions that have never been billed have no price yet, so they are left out of both sides.'),
-        'average_order_value' => $M('Avg Order Value', $icons['calc'], 2, 'good'),
-        'subscription_revenue' => $M('Subscription Revenue', $icons['arrow_path'], 2, 'good'),
-        'one_time_revenue' => $M('One-time Revenue', $icons['bag'], 2, 'good'),
+        'average_order_value' => $M('Avg Order Value', $icons['calc'], 2, 'good', null,
+            'Avg Order Value = Revenue · Gross ÷ completed orders, in the period.'),
+        'subscription_revenue' => $M('Subscription Revenue', $icons['arrow_path'], 2, 'good', null,
+            'Subscription Revenue = Σ total charged on completed parent and renewal orders created in the period (gross).'),
+        'one_time_revenue' => $M('One-time Revenue', $icons['bag'], 2, 'good', null,
+            'One-time Revenue = Σ total charged on completed one-time orders created in the period (gross).'),
     ];
 
     $retentionCards = [
@@ -95,27 +106,34 @@
         'monthly_churn_rate_adjusted' => $M('Churn · Adjusted', $icons['pause'], 1, 'bad', "'includes dormant on-hold'",
             'Churn · Adjusted = (subscribers lost + on-hold subscriptions that went dormant this period) ÷ (active at period start + new in period) × 100. Dormant = on hold with no successful payment for 1.5 billing cycles (45 days on a monthly plan). Each is counted once, in the period it crosses that line.'),
         'net_revenue_retention' => $M('Net Revenue Retention', $icons['dollar'], 1, 'good', "'of the opening book'",
-            'Of the recurring revenue on the books when the period opened, how much was still billing at the end. Counts only subscribers who were already there, so new sign-ups cannot flatter it. Above 100% means upgrades outweighed losses.'),
+            'NRR = (Σ last payment at the period end of the subscribers active when it opened, 0 if they stopped billing) ÷ (Σ their last payment when it opened) × 100. New sign-ups are excluded, so they cannot flatter it. Above 100% means upgrades outweighed losses.'),
     ];
     $retentionChips = [
         'monthly_churn_rate' => $M('Churn · Gross', $icons['x_circle'], 2, 'bad', "'all leavers'",
             'Churn · Gross = subscribers lost ÷ (active at period start + new in period) × 100. Same as Real but failed sign-ups are not taken out.'),
         'customer_churn_rate' => $M('Churn · Customers', $icons['users'], 2, 'bad', "'people, not subscriptions'",
-            'A customer has churned only when every subscription they hold has ended. 27% of cancellations belong to people who still have a live one — plan changes the subscription rate reports as losses.'),
-        'renewal_success_rate' => $M('Renewal Success', $icons['arrow_path'], 2, 'good'),
+            'Churn · Customers = customers (billing email, else customer ID) with an active subscription at the period start and none at its end ÷ customers active at the start × 100. 27% of cancellations belong to people who still have a live one.'),
+        'renewal_success_rate' => $M('Renewal Success', $icons['arrow_path'], 2, 'good', null,
+            'Renewal Success = completed renewal orders ÷ all renewal orders created in the period × 100.'),
         'revenue_at_risk' => $M('Revenue at Risk', $icons['exclaim'], 2, 'bad', 'revenueAtRiskNote()',
             'Revenue at Risk = monthly value of every dormant on-hold subscription (last payment × 30 ÷ cycle days) + failed and pending renewal orders in the period. Recoverable, involuntary churn.'),
-        'failed_renewals' => $M('Failed Renewals', $icons['x_circle'], 2, 'bad'),
+        'failed_renewals' => $M('Failed Renewals', $icons['x_circle'], 2, 'bad', null,
+            'Failed Renewals = renewal orders created in the period whose status is not completed.'),
     ];
 
     $customerCards = [
-        'unique_customers' => $M('Unique Customers', $icons['users'], 1, 'good'),
-        'revenue_per_customer' => $M('Revenue / Customer', $icons['dollar'], 1, 'good'),
+        'unique_customers' => $M('Unique Customers', $icons['users'], 1, 'good', null,
+            'Unique Customers = distinct customer IDs with an order created in the period.'),
+        'revenue_per_customer' => $M('Revenue / Customer', $icons['dollar'], 1, 'good', null,
+            'Revenue / Customer = Revenue · Gross ÷ Unique Customers, in the period.'),
     ];
     $customerChips = [
-        'new_customers' => $M('New Customers', $icons['user_plus'], 2, 'good'),
-        'returning_customers' => $M('Returning Customers', $icons['arrow_path'], 2, 'good'),
-        'repeat_rate' => $M('Repeat Rate', $icons['check_badge'], 2, 'good'),
+        'new_customers' => $M('New Customers', $icons['user_plus'], 2, 'good', null,
+            'New Customers = customers whose first-ever order was created in the period.'),
+        'returning_customers' => $M('Returning Customers', $icons['arrow_path'], 2, 'good', null,
+            'Returning Customers = Unique Customers − New Customers.'),
+        'repeat_rate' => $M('Repeat Rate', $icons['check_badge'], 2, 'good', null,
+            'Repeat Rate = customers with 2 or more orders in the period ÷ Unique Customers × 100.'),
     ];
 
     // Direction map handed to Alpine so the comparison badge knows which way is
@@ -133,15 +151,15 @@
      */
     $heroCards = [
         'mrr' => $M('MRR', $icons['arrow_path'], 1, 'good', "'recurring, normalised to 30 days'",
-            'Every active subscription priced at its most recent payment and normalised to a month by its own billing cycle — a two-monthly plan at £40 is £20 of MRR. Gross: includes VAT and shipping, like every money figure here.'),
+            'MRR = Σ over active, billed subscriptions of (last completed payment × 30 ÷ billing-cycle days) — a two-monthly plan at £40 is £20 of MRR. Gross: includes VAT and shipping, like every money figure here.'),
         'net_revenue_retention' => $M('Net Revenue Retention', $icons['scale'], 1, 'good', "'of the opening book'",
-            'Of the recurring revenue on the books when the period opened, how much was still billing at the end. New sign-ups are excluded, so it cannot be flattered by acquisition.'),
+            'NRR = (Σ last payment at the period end of the subscribers active when it opened, 0 if they stopped billing) ÷ (Σ their last payment when it opened) × 100. New sign-ups are excluded.'),
         'monthly_churn_rate_net' => $M('Churn · Real', $icons['x_circle'], 1, 'bad', "'excludes failed sign-ups'",
             'Churn · Real = (subscribers lost − failed sign-ups) ÷ (active at period start + new in period) × 100. Failed sign-ups ended without ever completing an order.'),
         'monthly_churn_rate_adjusted' => $M('Churn · Adjusted', $icons['pause'], 1, 'bad', "'includes dormant on-hold'",
             'Churn · Adjusted = (subscribers lost + on-hold subscriptions that went dormant this period) ÷ (active at period start + new in period) × 100. Dormant = on hold with no successful payment for 1.5 billing cycles (45 days on a monthly plan). Each is counted once, in the period it crosses that line.'),
         'total_revenue' => $M('Revenue', $icons['dollar'], 1, 'good', "'completed orders, gross'",
-            'Completed orders in the period. Gross — it includes VAT and shipping, which together are about 24% of the figure.'),
+            'Revenue = Σ total charged on completed orders created in the period. Gross: it includes VAT and shipping, together about 24% of the figure.'),
     ];
 
 @endphp
@@ -1575,7 +1593,7 @@
     @php
         // [key, label, icon, gradient, tooltip, revenue-subtext-key]
         $klaviyoTiles = [
-            ['delivery_rate', 'Delivery Rate', $icons['check_circle'], 'from-emerald-400 to-teal-500', null, null],
+            ['delivery_rate', 'Delivery Rate', $icons['check_circle'], 'from-emerald-400 to-teal-500', 'Delivery rate = delivered ÷ recipients.', null],
             ['open_rate', 'Open Rate', $icons['users'], 'from-sky-400 to-blue-500', 'Inflated by Apple Mail privacy: Apple Mail Privacy Protection pre-loads messages, which Klaviyo records as opens, so open rate reads higher than real reading. Click rate is the more reliable engagement figure.', 'opens_unique'],
             ['click_rate', 'Click Rate', $icons['arrow_path'], 'from-indigo-400 to-violet-500', 'Click rate = unique clicks ÷ delivered. Campaign click rates here are usually under 1%, so it is shown to two decimals.', 'clicks_unique'],
             ['revenue', 'Revenue', $icons['dollar'], 'from-emerald-400 to-teal-500', 'Total order revenue (Placed Order) attributed to campaigns.', null],
@@ -1619,7 +1637,7 @@
 
     @php
         $klaviyoFlowTiles = [
-            ['flow_delivery_rate', 'Delivery Rate', $icons['check_circle'], 'from-emerald-400 to-teal-500', null, null],
+            ['flow_delivery_rate', 'Delivery Rate', $icons['check_circle'], 'from-emerald-400 to-teal-500', 'Delivery rate = delivered ÷ recipients.', null],
             ['flow_open_rate', 'Open Rate', $icons['users'], 'from-sky-400 to-blue-500', 'Inflated by Apple Mail privacy: Apple Mail Privacy Protection pre-loads messages, which Klaviyo records as opens, so open rate reads higher than real reading. Click rate is the more reliable engagement figure.', 'flow_opens_unique'],
             ['flow_click_rate', 'Click Rate', $icons['arrow_path'], 'from-indigo-400 to-violet-500', 'Click rate = unique clicks ÷ delivered.', 'flow_clicks_unique'],
             ['flow_revenue', 'Revenue', $icons['dollar'], 'from-emerald-400 to-teal-500', 'Order revenue attributed to automated flows.', null],

@@ -52,6 +52,7 @@ All bucketing and "today" maths moves to Europe/London through one helper.
 | P3-2 Klaviyo clicks | `KlaviyoService`, `config/klaviyo.php`, `.env.example`, email tiles | Field names (`clicks_unique`, `opens_unique`, `delivered`) were already right, and stored history shows clicks arriving (0.2–1.1% a month). The 0% was precision: rates were rounded and stored at 1 dp (`decimal(5,1)`), so a 0.04% campaign click rate became 0.0%. Rates are now 2 dp (migration widens the six rate columns to `decimal(6,2)`), and the counts behind them (`delivered`, `opens_unique`, `clicks_unique`, + flow equivalents) are stored and shown under the tile ("3 of 8,000 delivered"). Revision default 2025-01-15 → 2026-07-15 (current GA; no changes since to the endpoints used). Open-rate tooltips say "Inflated by Apple Mail privacy". Tests: `KlaviyoServiceTest` updated + 2 new. |
 | P3-3 Data Health page | new `app/Services/DataHealthService.php`, new controller + view + routes, rail link | New `DataHealthService` (six sections: invalid status for type, £0 completed orders, multiple active subs to one product, unmapped sources, on-hold by age 0–15/16–30/31–45/45+ days, dashboard vs source per status), `DataHealthController` (page + per-section CSV export), `data-health/index.blade.php`, sidebar link; the freshness strip's order counts link to it. `DataFreshness::sourceStatusCounts()`. Tests: `DataHealthTest`. Real data: 3 / 8 / 14 / 15 / 55 (18, 15, 10, 12) / 12 status rows, all matching except the excluded wc-active and trash orders. |
 | P4-1 Direct sync | `config/database.php` (`woocommerce` connection), new `app/Services/WooSyncService.php`, new command `woo:sync`, schedule, `DataFreshness` (`last_sync_at`) | Read-only `woocommerce` connection (`WC_DB_HOST/PORT/NAME/USER/PASS`, `WC_TABLE_PREFIX`) in `config/database.php`, `config/woocommerce.php`. `WooSyncService` runs the existing export queries (04 and 05) with the prefix substituted and `date_updated_gmt > ?` / `comment_date_gmt > ?` added (5-minute overlap), upserts through `CsvImportService::upsert()` and `StatusHistoryImportService::upsert()` (now public), sets every session `READ ONLY`, and records `last_sync_at` in the new `sync_state` table (read by the freshness banner). `sourceOrderCount()` and `sourceStatusCounts()` feed the banner and Data Health live when connected. Command `woo:sync [--full]`, scheduled every 15 minutes when configured. CSV upload unchanged as the fallback. Tests: `WooSyncTest`. Not run against a live WooCommerce DB (no credentials here). |
+| DoD tooltips | blade metric table, Klaviyo tiles | Every KPI (40 cards/chips) has a tooltip with its exact formula; `LabelsTest::test_every_kpi_card_has_a_formula_tooltip` enforces it. |
 | P5 | Not started in this pass (see "Deferred") | |
 
 ## Decisions
@@ -65,3 +66,21 @@ All bucketing and "today" maths moves to Europe/London through one helper.
 ## Deferred
 
 - P5 (new features) is a separate piece of work after P0–P4.
+
+## Definition of done (status)
+
+- [x] All P0 and P1 tasks merged with tests passing (286 tests, `php artisan test`).
+- [ ] Baseline numbers reproduce exactly. They reproduce, with the fixes applied, except where the brief's own baseline was measured under a bug: Sep 2026 new subs is 79, not 78 (#20506, 00:47 BST on 1 Sep, moves in from August), and the "46 dormant on-hold" figure was measured at 1 Nov (29 at the real data timestamp). Status and order counts match exactly; see the Data Health per-status table.
+- [x] No metric can exceed 100% where it shouldn't (churn base includes joiners; survival is monotone), and no date label is in the future (snapshots capped at the data timestamp).
+- [x] Every KPI has a tooltip with its exact formula.
+- [x] `AUDIT_PLAN.md` updated file by file (table above).
+- [x] A `CHANGELOG.md` entry per task.
+
+## Deploying
+
+1. `php artisan migrate` (new tables `alert_incidents`, `channel_rules`, `sync_state`; Klaviyo rate columns widened).
+2. Set `ALERT_EMAIL_TO` (and optionally `ALERT_SLACK_WEBHOOK`); make sure the scheduler runs (`* * * * * php artisan schedule:run`).
+3. Update `KLAVIYO_REVISION` in `.env` to `2026-07-15` (or remove it to use the default).
+4. For the direct sync: create a SELECT-only MySQL user, set `WC_DB_*`, run `php artisan woo:sync --full` once.
+5. `npm run build`.
+

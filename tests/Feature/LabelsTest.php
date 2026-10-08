@@ -183,4 +183,19 @@ class LabelsTest extends TestCase
         // The Klaviyo tile counts list sign-ups, not subscription customers.
         $this->assertStringContainsString('New list subscribers', $html);
     }
+
+    // ---- Definition of done: every KPI states its formula ----------------------
+
+    public function test_every_kpi_card_has_a_formula_tooltip(): void
+    {
+        $source = file_get_contents(resource_path('views/dashboard/index.blade.php'));
+        $table = substr($source, strpos($source, '$flowCards = ['), strpos($source, '@endphp') - strpos($source, '$flowCards = ['));
+
+        preg_match_all('/\'(\w+)\' => \$M\((.*?)\),\n/s', $table, $cards, PREG_SET_ORDER);
+
+        $this->assertGreaterThanOrEqual(35, count($cards));
+        foreach ($cards as [, $key, $args]) {
+            $this->assertMatchesRegularExpression('/ = /', $args, "{$key} has no formula tooltip");
+        }
+    }
 }

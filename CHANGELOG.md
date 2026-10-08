@@ -138,3 +138,6 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - `last_sync_at` is stored and shown in the freshness banner. With the sync connected, the banner's source order count and the Data Health status reconciliation come live from WooCommerce.
 - CSV upload is unchanged and remains the fallback.
 - Requires `php artisan migrate` (new `sync_state` table). Not yet exercised against the live database. Run `php artisan woo:sync --full` once after setting the credentials.
+
+### Definition of done: KPI tooltips
+- Every KPI card and chip (40) and the Klaviyo delivery tiles now has a tooltip stating its exact formula. A test fails if a card is added without one.
