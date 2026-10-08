@@ -108,3 +108,9 @@ All notable changes to Hurayra Analytics. One entry per audit task
 
 ### P2-8: ARR reconciles with MRR
 - ARR is computed from the MRR as displayed (rounded to the penny) × 12, on the cards and in the monthly series. Baseline: £52,319.16 = £4,359.93 × 12 (was £52,319.14). The tooltip gives the formula.
+
+### P3-1: Source / channel normalisation
+- New `channel_rules` table, seeded with the audit mapping (Instagram Paid / Organic, Facebook, Google Ads, Google Organic, Email, Other Search, Direct), and a **Channel rules** admin screen to add, edit and delete rules.
+- Acquisition defaults to a **Channel** view. Hovering a channel shows the raw sources behind it. Unmapped sources go to **Other** and are listed on the Channel rules screen (and on Data Health). Raw columns are still available as other views.
+- Totals still reconcile with P1-4. Baseline: 973 subscriptions, 243 active, in 9 channels.
+- Requires `php artisan migrate`.

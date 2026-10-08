@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ChannelRuleController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\KlaviyoController;
 use App\Http\Controllers\MetricsController;
@@ -32,6 +33,12 @@ Route::get('/report/client', [MetricsController::class, 'clientReport'])->name('
 // Klaviyo email-performance tiles (reads stored snapshots; sync runs on a schedule).
 Route::get('/api/klaviyo/tiles', [KlaviyoController::class, 'tiles'])->name('klaviyo.tiles');
 Route::post('/api/klaviyo/refresh', [KlaviyoController::class, 'refresh'])->name('klaviyo.refresh');
+
+// Channel rules: raw utm_source / utm_medium -> marketing channel.
+Route::get('/settings/channels', [ChannelRuleController::class, 'index'])->name('channels.index');
+Route::post('/settings/channels', [ChannelRuleController::class, 'store'])->name('channels.store');
+Route::put('/settings/channels/{rule}', [ChannelRuleController::class, 'update'])->name('channels.update');
+Route::delete('/settings/channels/{rule}', [ChannelRuleController::class, 'destroy'])->name('channels.destroy');
 
 // Upload + import history.
 Route::get('/uploads', [UploadController::class, 'index'])->name('uploads.index');

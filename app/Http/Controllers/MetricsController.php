@@ -158,9 +158,9 @@ class MetricsController extends Controller
     public function segments(Request $request): JsonResponse
     {
         return response()->json($this->metrics->segmentPerformance(
-            $request->string('dimension', 'utm_source')->toString(),
+            $request->string('dimension', 'channel')->toString(),
             min(100, max(1, (int) $request->integer('min', 5))),
-        ) + ['dimensions' => MetricsService::SEGMENT_DIMENSIONS]);
+        ) + ['dimensions' => MetricsService::SEGMENT_VIEWS]);
     }
 
     /** AJAX endpoint: the live renewal pipeline for the next N days. */

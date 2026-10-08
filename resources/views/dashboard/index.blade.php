@@ -369,7 +369,7 @@
                              :class="r.reliable ? '' : 'opacity-50'"
                              :title="r.reliable ? '' : `Only ${r.eligible} subscriptions old enough to judge — too few to act on`">
                             <span class="w-28 shrink-0 truncate text-xs font-medium text-slate-600">
-                                <span x-text="r.segment"></span>
+                                <span x-text="r.segment" :title="segmentSourcesTitle(r)"></span>
                                 <span x-show="! r.reliable" class="ml-1 text-[10px] font-semibold text-amber-700">n too small</span>
                             </span>
                             <span class="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
@@ -828,7 +828,7 @@
                         <tr class="transition hover:bg-slate-50/60">
                             <td class="max-w-[220px] truncate px-5 py-2.5 font-medium text-slate-700">
                                 <span x-text="r.segment"
-                                      :title="r.rollup ? `${r.rollup} segments with fewer than 5 subscriptions each` : ''"></span>
+                                      :title="[segmentSourcesTitle(r), r.rollup ? `${r.rollup} segments with fewer than 5 subscriptions each folded in` : ''].filter(Boolean).join(' · ')"></span>
                                 <span x-show="r.rollup" class="ml-1 text-[11px] font-normal text-slate-400"
                                       x-text="`· ${r.rollup} smaller`"></span>
                                 <span x-show="! r.reliable"

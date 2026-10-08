@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Services\ChannelResolver;
 use App\Services\DataFreshness;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
@@ -14,7 +15,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Caches the channel rules for the request.
+        $this->app->singleton(ChannelResolver::class);
     }
 
     /**

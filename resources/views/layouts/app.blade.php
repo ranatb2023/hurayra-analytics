@@ -42,6 +42,14 @@
                 </svg>
                 Upload CSV
             </a>
+            <a href="{{ route('channels.index') }}"
+               class="mt-0.5 flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition
+                      {{ request()->routeIs('channels.*') ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white' }}">
+                <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+                </svg>
+                Channel rules
+            </a>
             <p class="mt-2 px-3 text-[10px] leading-relaxed text-slate-600">
                 All metrics derived from one WooCommerce export.
             </p>

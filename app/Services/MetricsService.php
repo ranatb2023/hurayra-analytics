@@ -90,6 +90,13 @@ class MetricsService
     ];
 
     /**
+     * What {@see segmentPerformance()} can split by: the raw columns, plus
+     * `channel` -- utm_source and utm_medium normalised by the channel rules
+     * ({@see ChannelResolver}). Not a column, so never interpolated into SQL.
+     */
+    public const SEGMENT_VIEWS = ['channel', ...self::SEGMENT_DIMENSIONS];
+
+    /**
      * How many segments a split trend plots. Past half a dozen lines a chart
      * stops being readable, so the tail is reported as a count rather than
      * drawn -- and never silently dropped.
@@ -1231,15 +1238,23 @@ class MetricsService
      * predicts lifetime value better than anything else available this early,
      * and roughly half of all payers here never get there.
      *
-     * @param  string  $dimension  a whitelisted column on the subscription row
+     * `channel` maps raw sources through the channel rules: `ig`,
+     * `instagram` and `l.instagram.com` are one channel, `google` splits into
+     * Ads and Organic by medium, and anything unmapped is "Other". Each
+     * channel row lists the raw sources behind it, for the hover.
+     *
+     * @param  string  $dimension  `channel` or a whitelisted column on the subscription row
      * @param  int  $min  segments smaller than this are folded into one "Other" row
-     * @return array{dimension:string, rows:array<int, array<string, mixed>>}
+     * @return array{dimension:string, rows:array<int, array<string, mixed>>, totals:array{subs:int, still_active:int}}
      */
-    public function segmentPerformance(string $dimension = 'utm_source', int $min = 5): array
+    public function segmentPerformance(string $dimension = 'channel', int $min = 5): array
     {
-        if (! in_array($dimension, self::SEGMENT_DIMENSIONS, true)) {
+        if (! in_array($dimension, self::SEGMENT_VIEWS, true)) {
             $dimension = 'utm_source';
         }
+
+        $byChannel = $dimension === 'channel';
+        $channels = app(ChannelResolver::class);
 
         $min = max(1, $min);
         $asOf = $this->asOfGmt();
@@ -1254,13 +1269,18 @@ class MetricsService
             ->selectRaw('subscription_id, COUNT(*) as payments, SUM(total_amount) as revenue')
             ->groupBy('subscription_id');
 
-        $book = $this->lifecycleSubs([$dimension]);
+        $book = $this->lifecycleSubs();
+
+        // The column is whitelisted above; `channel` reads the raw columns
+        // and is resolved in PHP.
+        $column = $byChannel ? 'utm_source' : $dimension;
 
         $perSub = DB::table('records as s')
             ->leftJoinSub($paid, 'p', 'p.subscription_id', '=', 's.id')
             ->where('s.record_type', 'shop_subscription')
-            ->selectRaw('s.id, s.'.$dimension.' as segment, COALESCE(p.payments, 0) as payments, COALESCE(p.revenue, 0) as revenue')
+            ->selectRaw('s.id, s.'.$column.' as segment, COALESCE(p.payments, 0) as payments, COALESCE(p.revenue, 0) as revenue')
             ->selectRaw('s.date_created_gmt as created, s.billing_period, s.billing_interval, s.next_payment_at')
+            ->selectRaw('s.utm_medium, s.attribution_type')
             ->get();
 
         // Group in PHP: "still active" is the shared isActive() rule, which no
@@ -1268,12 +1288,19 @@ class MetricsService
         $groups = [];
 
         foreach ($perSub as $r) {
-            $label = $this->cleanAttribute($r->segment) ?? self::NONE;
+            $label = $byChannel
+                ? $channels->resolve($r->segment, $r->utm_medium, $r->attribution_type)
+                : ($this->cleanAttribute($r->segment) ?? self::NONE);
             $sub = $book[(int) $r->id] ?? null;
 
             $groups[$label] ??= self::EMPTY_SEGMENT;
             $g = &$groups[$label];
             $g['subs']++;
+
+            if ($byChannel) {
+                $raw = $this->cleanAttribute($r->segment) ?? $this->cleanAttribute($r->attribution_type) ?? self::NONE;
+                $g['sources'][$raw] = ($g['sources'][$raw] ?? 0) + 1;
+            }
             $g['never_paid'] += (int) $r->payments === 0 ? 1 : 0;
 
             // Right-censoring: a subscription whose second payment is not due
@@ -1291,13 +1318,21 @@ class MetricsService
         // Segments too small to read are folded into one "Other" row rather
         // than dropped: dropped, they made the "still active" column add up to
         // less than the active subscriber count on the Overview.
-        $other = self::EMPTY_SEGMENT;
+        // An unmapped-channel "Other" and the small-segment "Other" are the
+        // same bucket, so they are merged rather than shown twice.
+        $other = $groups[ChannelResolver::OTHER] ?? self::EMPTY_SEGMENT;
+        unset($groups[ChannelResolver::OTHER]);
         $folded = 0;
 
         foreach ($groups as $label => $g) {
             if ($g['subs'] < $min) {
-                foreach ($other as $k => $_) {
-                    $other[$k] += $g[$k];
+                foreach (array_keys(self::EMPTY_SEGMENT) as $k) {
+                    if ($k !== 'sources') {
+                        $other[$k] += $g[$k];
+                    }
+                }
+                foreach ($g['sources'] as $raw => $n) {
+                    $other['sources'][$raw] = ($other['sources'][$raw] ?? 0) + $n;
                 }
                 $folded++;
                 unset($groups[$label]);
@@ -1312,8 +1347,8 @@ class MetricsService
             $out[] = $this->segmentRow((string) $label, $g);
         }
 
-        if ($folded > 0) {
-            $out[] = $this->segmentRow('Other', $other) + ['rollup' => $folded];
+        if ($other['subs'] > 0) {
+            $out[] = $this->segmentRow(ChannelResolver::OTHER, $other) + ['rollup' => $folded];
         }
 
         return [
@@ -1329,6 +1364,7 @@ class MetricsService
     /** Accumulator for one segment of {@see segmentPerformance()}. */
     private const EMPTY_SEGMENT = [
         'subs' => 0, 'never_paid' => 0, 'eligible' => 0, 'repeat_payers' => 0, 'still_active' => 0, 'revenue' => 0.0,
+        'sources' => [],
     ];
 
     /**
@@ -1394,7 +1430,57 @@ class MetricsService
             // than reporting that nobody has supplied it.
             'contribution' => $this->contributionFrom($ltv),
             'payback_ratio' => $this->paybackRatio($ltv),
+            // The raw utm_source values behind a channel, biggest first.
+            'sources' => $this->rankedSources($g['sources']),
         ];
+    }
+
+    /**
+     * @param  array<string, int>  $sources
+     * @return array<int, array{source:string, subs:int}>
+     */
+    private function rankedSources(array $sources): array
+    {
+        arsort($sources);
+
+        return array_map(
+            fn ($source, $n) => ['source' => (string) $source, 'subs' => $n],
+            array_keys($sources),
+            $sources,
+        );
+    }
+
+    /**
+     * Raw source values no channel rule maps, with how many subscriptions and
+     * orders carry each -- the list a new rule should be written for.
+     *
+     * @return array<int, array{source:string, medium:?string, subscriptions:int, orders:int}>
+     */
+    public function unmappedSources(): array
+    {
+        $channels = app(ChannelResolver::class);
+        $out = [];
+
+        foreach (DB::table('records')
+            ->whereIn('record_type', ['shop_subscription', 'shop_order'])
+            ->selectRaw('record_type, utm_source, utm_medium, attribution_type, COUNT(*) as n')
+            ->groupBy('record_type', 'utm_source', 'utm_medium', 'attribution_type')
+            ->get() as $r) {
+            $raw = $this->cleanAttribute($r->utm_source) ?? $this->cleanAttribute($r->attribution_type);
+
+            if ($raw === null || $channels->match($r->utm_source, $r->utm_medium, $r->attribution_type) !== null) {
+                continue;
+            }
+
+            $medium = $this->cleanAttribute($r->utm_medium);
+            $key = strtolower($raw).'|'.strtolower((string) $medium);
+            $out[$key] ??= ['source' => $raw, 'medium' => $medium, 'subscriptions' => 0, 'orders' => 0];
+            $out[$key][$r->record_type === 'shop_subscription' ? 'subscriptions' : 'orders'] += (int) $r->n;
+        }
+
+        usort($out, fn ($a, $z) => ($z['subscriptions'] + $z['orders']) <=> ($a['subscriptions'] + $a['orders']));
+
+        return array_values($out);
     }
 
     /**

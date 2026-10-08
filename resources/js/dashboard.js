@@ -56,7 +56,7 @@ export default (config = {}) => ({
     // Lifetime value by sign-up month (period-independent).
     cohortValue: { rows: [] },
     // Acquisition-segment performance; dimension is user-switchable.
-    segments: { dimension: 'utm_source', rows: [], dimensions: [], totals: null, loading: false },
+    segments: { dimension: 'channel', rows: [], dimensions: [], totals: null, loading: false },
     // The live renewal pipeline.
     renewals: { days: 14, total: 0, at_first_renewal: 0, value: 0, rows: [], failed: { total: 0, value: 0, rows: [] }, loading: false },
     // Campaign audiences: lists you can push straight to Klaviyo.
@@ -248,10 +248,16 @@ export default (config = {}) => ({
     /** Human label for a raw column name. */
     dimensionLabel(d) {
         return ({
-            utm_source: 'Source', utm_medium: 'Medium', utm_campaign: 'Campaign',
+            channel: 'Channel', utm_source: 'Raw source', utm_medium: 'Medium', utm_campaign: 'Campaign',
             attribution_type: 'Type', device_type: 'Device', coupon_code: 'Coupon',
             billing_period: 'Cycle', primary_product: 'Product',
         })[d] ?? d;
+    },
+
+    /** Hover text for a channel row: the raw sources it was built from. */
+    segmentSourcesTitle(r) {
+        if (!(r.sources ?? []).length) return '';
+        return 'Raw sources: ' + r.sources.map((s) => `${s.source} (${s.subs})`).join(', ');
     },
 
     /** Bar width for the repeat-rate meter, on a 0-100 scale. */
