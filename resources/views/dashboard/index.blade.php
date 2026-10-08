@@ -732,7 +732,10 @@
                         <th class="px-5 py-2.5 text-right">Active at start</th>
                         <th class="px-5 py-2.5 text-right">New</th>
                         <th class="px-5 py-2.5 text-right">Churned</th>
-                        <th class="px-5 py-2.5 text-right" title="Moved to On Hold or Pending Cancellation this month, net of those that came back. Not churn.">On hold / pending</th>
+                        <th class="px-5 py-2.5 text-right" data-net-change-header
+                            title="Net change on hold / pending = active at start + new − churned − active at end. Subscriptions that moved to On hold or Pending cancellation this month, minus those that came back to Active. Negative means more came back than left. Not churn: none of them has ended.">
+                            Net change on hold / pending
+                        </th>
                         <th class="px-5 py-2.5 text-right">Active at end</th>
                         <th class="px-5 py-2.5 text-right">Net</th>
                         <th class="px-5 py-2.5 text-right" title="Churned ÷ (active at start + new) × 100">Churn rate</th>

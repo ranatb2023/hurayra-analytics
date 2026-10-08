@@ -167,4 +167,17 @@ class LabelsTest extends TestCase
         $this->assertSame('typein', $row['one_time_source']);
         $this->assertNull($row['one_time_medium']);
     }
+
+    // ---- P2-6 / P2-7 --------------------------------------------------------
+
+    public function test_history_and_email_headers_say_what_they_count(): void
+    {
+        $this->sub(1, 'active');
+
+        $html = $this->get('/')->assertOk()->getContent();
+
+        $this->assertStringContainsString('Net change on hold / pending', $html);
+        $this->assertStringContainsString('Negative means more came back than left', $html);
+        $this->assertStringNotContainsString('>On hold / pending<', $html);
+    }
 }

@@ -99,3 +99,6 @@ All notable changes to Hurayra Analytics. One entry per audit task
 ### P2-5: No raw `NULL` strings in the UI
 - The literal text `NULL` that MySQL writes into a CSV export is imported as an empty value, and rows already stored with it are treated as empty when displayed.
 - Every missing attribution value renders as **(none)** (it was variously "NULL", "(unattributed)" and "Not recorded"). "NULL · typein" no longer appears.
+
+### P2-6: Subscriber History "On hold / pending" column
+- Renamed **Net change on hold / pending**, with a tooltip giving the formula (active at start + new − churned − active at end) and explaining that a negative value means more subscriptions came back to Active than left it.
