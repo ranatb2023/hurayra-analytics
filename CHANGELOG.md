@@ -131,3 +131,10 @@ All notable changes to Hurayra Analytics. One entry per audit task
   - on-hold subscriptions by age (0–15, 16–30, 31–45, 45+ days);
   - dashboard vs source row counts per status.
 - Nothing on the page modifies data. Baseline: 3 invalid-status orders, 8 £0 completed orders, 14 duplicate active subscriptions, 15 unmapped sources, 55 on hold (18 / 15 / 10 / 12 by age); per-status counts match except the excluded wc-active and trash orders.
+
+### P4-1: Direct sync from WooCommerce
+- New read-only `woocommerce` database connection, configured by `WC_DB_HOST`, `WC_DB_PORT`, `WC_DB_NAME`, `WC_DB_USER`, `WC_DB_PASS` and `WC_TABLE_PREFIX` (default `wp_`). **Use a dedicated MySQL user with SELECT only, never the WordPress admin user.** Each session is also set `READ ONLY`.
+- `php artisan woo:sync` (scheduled every 15 minutes when configured) reads orders and subscriptions with `date_updated_gmt` after the last sync, plus new status notes, using the same queries as `database/export/04` and `05`. Rows are upserted exactly as a CSV upload would write them. `--full` re-reads everything.
+- `last_sync_at` is stored and shown in the freshness banner. With the sync connected, the banner's source order count and the Data Health status reconciliation come live from WooCommerce.
+- CSV upload is unchanged and remains the fallback.
+- Requires `php artisan migrate` (new `sync_state` table). Not yet exercised against the live database. Run `php artisan woo:sync --full` once after setting the credentials.

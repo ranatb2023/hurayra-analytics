@@ -338,6 +338,19 @@ class CsvImportService
         return null;
     }
 
+    /**
+     * Upsert already-normalised rows ({@see normaliseRow()}). Shared with the
+     * direct WooCommerce sync, so both paths write records the same way.
+     *
+     * @param  array<int, array<string, mixed>>  $rows
+     */
+    public function upsert(array $rows): void
+    {
+        foreach (array_chunk($rows, self::CHUNK_SIZE) as $chunk) {
+            $this->flush($chunk);
+        }
+    }
+
     private function flush(array $buffer): void
     {
         // Derived from the payload rather than listed by hand: a hardcoded list

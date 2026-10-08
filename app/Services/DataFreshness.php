@@ -108,6 +108,12 @@ class DataFreshness
      */
     public function sourceOrderCount(): array
     {
+        $live = app(WooSyncService::class)->sourceOrderCount();
+
+        if ($live !== null) {
+            return ['count' => $live, 'from' => 'WooCommerce'];
+        }
+
         return [
             'count' => DB::table('records')
                 ->where('record_type', 'shop_order')
@@ -125,6 +131,12 @@ class DataFreshness
      */
     public function sourceStatusCounts(): array
     {
+        $live = app(WooSyncService::class)->sourceStatusCounts();
+
+        if ($live !== null) {
+            return ['counts' => $live, 'from' => 'WooCommerce'];
+        }
+
         $counts = [];
 
         foreach (DB::table('records')

@@ -188,6 +188,28 @@ class StatusHistoryImportService
         return self::STATUS_NAMES[$name] ?? null;
     }
 
+    /**
+     * Upsert already-normalised changes ({@see normaliseRow()}), de-duplicated
+     * on the unique key. Shared with the direct WooCommerce sync.
+     *
+     * @param  array<int, array<string, mixed>>  $changes
+     * @return int rows written
+     */
+    public function upsert(array $changes): int
+    {
+        $keyed = [];
+        foreach ($changes as $c) {
+            $keyed[implode('|', [$c['subscription_id'], $c['changed_at'], $c['from_status'], $c['to_status']])] = $c;
+        }
+
+        $written = 0;
+        foreach (array_chunk($keyed, self::CHUNK_SIZE, true) as $chunk) {
+            $written += $this->flush($chunk);
+        }
+
+        return $written;
+    }
+
     /** @return int rows written */
     private function flush(array $buffer): int
     {

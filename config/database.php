@@ -64,6 +64,31 @@ return [
             ]) : [],
         ],
 
+        /*
+         * The live WooCommerce database, READ ONLY (App\Services\WooSyncService).
+         * Use a dedicated MySQL user granted SELECT only -- never the WordPress
+         * admin user. The sync also sets each session READ ONLY, so a write
+         * would fail even with a user that could make one.
+         */
+        'woocommerce' => [
+            'driver' => 'mysql',
+            'host' => env('WC_DB_HOST'),
+            'port' => env('WC_DB_PORT', '3306'),
+            'database' => env('WC_DB_NAME'),
+            'username' => env('WC_DB_USER'),
+            'password' => env('WC_DB_PASS', ''),
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
+            // Table names are written out in the export SQL with this
+            // prefix substituted, so Laravel's own prefixing stays off.
+            'prefix' => '',
+            'strict' => false,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                (PHP_VERSION_ID >= 80500 ? Mysql::ATTR_SSL_CA : PDO::MYSQL_ATTR_SSL_CA) => env('WC_DB_SSL_CA'),
+            ]) : [],
+        ],
+
         'mariadb' => [
             'driver' => 'mariadb',
             'url' => env('DB_URL'),
