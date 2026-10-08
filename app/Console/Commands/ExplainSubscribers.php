@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\Record;
 use App\Services\MetricsService;
+use App\Support\Clock;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -37,13 +38,14 @@ class ExplainSubscribers extends Command
             return self::FAILURE;
         }
 
-        $start = CarbonImmutable::parse($month.'-01')->startOfMonth();
+        // UK months: a sign-up at 00:30 BST on the 1st belongs to that month.
+        $start = CarbonImmutable::parse($month.'-01', Clock::tz())->startOfMonth();
         $at = (string) $this->option('at');
 
         $instant = match (true) {
             $at === 'start' => $start,
             $at === 'end' => $start->addMonth(),
-            (bool) preg_match('/^\d{4}-\d{2}-\d{2}$/', $at) => CarbonImmutable::parse($at)->startOfDay(),
+            (bool) preg_match('/^\d{4}-\d{2}-\d{2}$/', $at) => CarbonImmutable::parse($at, Clock::tz())->startOfDay(),
             default => null,
         };
 
@@ -54,10 +56,11 @@ class ExplainSubscribers extends Command
         }
 
         $target = $this->option('target') === null ? null : (int) $this->option('target');
-        $t = $instant->toDateTimeString();
+        $t = Clock::gmt($instant);
 
         $this->newLine();
-        $this->line("Active subscribers as of <options=bold>{$t}</> ({$month}, measured at the {$at})");
+        $this->line('Active subscribers as of <options=bold>'.$instant->toDateTimeString().' '.Clock::tz()
+            ."</> ({$month}, measured at the {$at})");
         $this->newLine();
 
         $subs = $this->subscriptions();
@@ -247,8 +250,8 @@ class ExplainSubscribers extends Command
      */
     private function renderMoments(array $subs, CarbonImmutable $start, ?int $target): void
     {
-        $startS = $start->toDateTimeString();
-        $endS = $start->addMonth()->toDateTimeString();
+        $startS = Clock::gmt($start);
+        $endS = Clock::gmt($start->addMonth());
 
         // Active at any point in the window: had started before it closed, and
         // had not already ended when it opened.
@@ -300,7 +303,7 @@ class ExplainSubscribers extends Command
         $rows = [];
 
         for ($day = $start; $day <= $start->addMonth(); $day = $day->addDay()) {
-            $t = $day->toDateTimeString();
+            $t = Clock::gmt($day);
             $rows[] = [
                 $day->format('D j M Y'),
                 $this->mark($this->activeCountAt($subs, $t), $target),

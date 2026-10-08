@@ -16,6 +16,10 @@ use InvalidArgumentException;
  *   custom: from = Y-m-d, to = Y-m-d (both required; inclusive of `to`)
  *
  * "now" is injectable so tests are deterministic.
+ *
+ * Every boundary is midnight in the business timezone ({@see Clock::tz()}), not
+ * UTC: October starts at 00:00 BST on the 1st, which is 23:00 GMT on 30 Sep.
+ * Callers comparing against `*_gmt` columns convert with {@see Clock::gmt()}.
  */
 class PeriodResolver
 {
@@ -25,7 +29,7 @@ class PeriodResolver
 
     private function now(): CarbonImmutable
     {
-        return $this->now ?? CarbonImmutable::now();
+        return ($this->now ?? Clock::now())->setTimezone(Clock::tz());
     }
 
     public function resolve(array $input): Period
@@ -52,7 +56,7 @@ class PeriodResolver
         $month = (int) ($input['month'] ?? $this->now()->month);
         $week = max(1, (int) ($input['week'] ?? 1));
 
-        $firstOfMonth = CarbonImmutable::create($year, $month, 1, 0, 0, 0);
+        $firstOfMonth = CarbonImmutable::create($year, $month, 1, 0, 0, 0, Clock::tz());
         $nextMonth = $firstOfMonth->addMonth();
         $daysInMonth = $firstOfMonth->daysInMonth;
         $weeksInMonth = (int) ceil($daysInMonth / 7);
@@ -77,7 +81,7 @@ class PeriodResolver
         $year = (int) ($input['year'] ?? $this->now()->year);
         $month = (int) ($input['month'] ?? $this->now()->month);
 
-        $start = CarbonImmutable::create($year, $month, 1, 0, 0, 0);
+        $start = CarbonImmutable::create($year, $month, 1, 0, 0, 0, Clock::tz());
         $end = $start->addMonth();
 
         return new Period($start, $end, 'month', $start->format('F Y'));
@@ -87,7 +91,7 @@ class PeriodResolver
     {
         $year = (int) ($input['year'] ?? $this->now()->year);
 
-        $start = CarbonImmutable::create($year, 1, 1, 0, 0, 0);
+        $start = CarbonImmutable::create($year, 1, 1, 0, 0, 0, Clock::tz());
         $end = $start->addYear();
 
         return new Period($start, $end, 'year', (string) $year);
@@ -99,9 +103,9 @@ class PeriodResolver
             throw new InvalidArgumentException('Custom range requires both "from" and "to".');
         }
 
-        $start = CarbonImmutable::parse($input['from'])->startOfDay();
+        $start = CarbonImmutable::parse($input['from'], Clock::tz())->startOfDay();
         // `to` is inclusive for the user, so the half-open end is the next day's start.
-        $end = CarbonImmutable::parse($input['to'])->startOfDay()->addDay();
+        $end = CarbonImmutable::parse($input['to'], Clock::tz())->startOfDay()->addDay();
 
         if ($end <= $start) {
             throw new InvalidArgumentException('"to" must be on or after "from".');

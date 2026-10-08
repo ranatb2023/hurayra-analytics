@@ -449,8 +449,8 @@ class MetricsService
         ($spec['where'])($query);
 
         if ($window) {
-            $query->where('date_created_gmt', '>=', $window->start->toDateTimeString())
-                ->where('date_created_gmt', '<', $window->end->toDateTimeString());
+            $query->where('date_created_gmt', '>=', Clock::gmt($window->start))
+                ->where('date_created_gmt', '<', Clock::gmt($window->end));
         }
 
         $query->groupBy('bucket');
@@ -715,8 +715,8 @@ class MetricsService
 
         for ($cursor = $firstMonth; $cursor <= $lastMonth; $cursor = $cursor->addMonth()) {
             $monthEnd = $cursor->addMonth();
-            $startS = $cursor->toDateTimeString();
-            $endS = $monthEnd->toDateTimeString();
+            $startS = Clock::gmt($cursor);
+            $endS = Clock::gmt($monthEnd);
 
             $activeStart = 0;
             $activeEnd = 0;
@@ -761,7 +761,7 @@ class MetricsService
 
         return [
             'rows' => $rows,
-            'end_date_coverage' => $this->endDateCoverage($lastMonth->addMonth()->toDateTimeString()),
+            'end_date_coverage' => $this->endDateCoverage(Clock::gmt($lastMonth->addMonth())),
         ];
     }
 
@@ -864,8 +864,8 @@ class MetricsService
 
         for ($cursor = $firstMonth; $cursor <= $lastMonth; $cursor = $cursor->addMonth()) {
             $monthEnd = $cursor->addMonth();
-            $startS = $cursor->toDateTimeString();
-            $endS = $monthEnd->toDateTimeString();
+            $startS = Clock::gmt($cursor);
+            $endS = Clock::gmt($monthEnd);
 
             $activeStart = 0;
             $churned = 0;
@@ -963,13 +963,14 @@ class MetricsService
      *
      * Every month walk anchors here rather than on "now", so a dataset that
      * stops in June does not trail empty months -- and the month this instant
-     * falls inside is the one that is still filling up.
+     * falls inside is the one that is still filling up. Returned in UK time,
+     * so "the month it falls inside" is a UK month.
      */
     private function latestDataInstant(): CarbonImmutable
     {
         $latest = (string) DB::table('records')->max('date_created_gmt');
 
-        return CarbonImmutable::parse($latest !== '' ? $latest : 'now');
+        return $latest !== '' ? Clock::toLocal($latest) : Clock::now();
     }
 
     /**
@@ -1032,7 +1033,7 @@ class MetricsService
 
         for ($cursor = $firstMonth; $cursor <= $lastMonth; $cursor = $cursor->addMonth()) {
             $monthEnd = $cursor->addMonth();
-            $endS = $monthEnd->toDateTimeString();
+            $endS = Clock::gmt($monthEnd);
 
             $mrr = 0.0;
             $paying = 0;
@@ -1590,7 +1591,7 @@ class MetricsService
         $cohorts = [];
 
         foreach ($subs as $r) {
-            $month = substr((string) $r->created, 0, 7);
+            $month = Clock::monthKey((string) $r->created);
             $terminal = in_array((string) $r->status, self::TERMINAL, true);
 
             $cohorts[$month] ??= ['size' => 0, 'active' => 0, 'churned' => 0, 'spends' => [], 'tenures' => []];
@@ -1614,8 +1615,7 @@ class MetricsService
         $cohorts = array_slice($cohorts, 0, $maxCohorts, true);
 
         // A cohort younger than this has not had time to show its true value.
-        $latest = (string) DB::table('records')->max('date_created_gmt');
-        $cutoff = CarbonImmutable::parse($latest !== '' ? $latest : 'now')->subMonths(3)->format('Y-m');
+        $cutoff = $this->latestDataInstant()->subMonths(3)->format('Y-m');
 
         $rows = [];
 
@@ -1675,7 +1675,7 @@ class MetricsService
         $cohortOf = [];   // sub id => 'Y-m'
         $cohortSize = []; // 'Y-m' => count
         foreach ($subs as $s) {
-            $month = substr((string) $s->date_created_gmt, 0, 7);
+            $month = Clock::monthKey((string) $s->date_created_gmt);
             $cohortOf[$s->id] = $month;
             $cohortSize[$month] = ($cohortSize[$month] ?? 0) + 1;
         }
@@ -1696,7 +1696,7 @@ class MetricsService
                 continue;
             }
             $cohort = $cohortOf[$sid];
-            $offset = $this->monthDiff($cohort, substr((string) $o->date_created_gmt, 0, 7));
+            $offset = $this->monthDiff($cohort, Clock::monthKey((string) $o->date_created_gmt));
             if ($offset < 0 || $offset > $maxOffset) {
                 continue;
             }
@@ -2243,8 +2243,8 @@ class MetricsService
             }
 
             $out[(int) $row->id] = [
-                'created' => $created->toDateTimeString(),
-                'held' => $held->toDateTimeString(),
+                'created' => Clock::gmt($created),
+                'held' => Clock::gmt($held),
             ];
         }
 
@@ -2999,11 +2999,17 @@ class MetricsService
         };
     }
 
-    /** Driver-aware date bucket key for grouping the trend. */
+    /**
+     * Driver-aware date bucket key for grouping the trend.
+     *
+     * Buckets are UK calendar periods: the GMT column is shifted to UK wall
+     * time first ({@see Clock::localSql()}), so a sign-up at 00:30 BST on
+     * 1 October lands in October rather than in September's last hour.
+     */
     private function bucketExpression(string $granularity): string
     {
         $driver = DB::connection()->getDriverName();
-        $col = 'date_created_gmt';
+        $col = Clock::localSql('date_created_gmt', $driver);
 
         // Step back three days, then forward to the next Thursday: that lands
         // on the Thursday of the row's own ISO week, whatever weekday it is.

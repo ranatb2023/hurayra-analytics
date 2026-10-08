@@ -26,7 +26,13 @@ final class Clock
     /** The business timezone every bucket and label is expressed in. */
     public static function tz(): string
     {
-        return (string) config('app.business_timezone', 'Europe/London');
+        // Plain unit tests run without the framework, so there may be no
+        // config to read; the store's own zone is the right default then.
+        $configured = function_exists('app') && app()->bound('config')
+            ? config('app.business_timezone')
+            : null;
+
+        return is_string($configured) && $configured !== '' ? $configured : 'Europe/London';
     }
 
     /** The real current instant, in the business timezone. */

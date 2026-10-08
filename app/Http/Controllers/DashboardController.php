@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Record;
 use App\Services\MetricsService;
+use App\Support\Clock;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
@@ -23,12 +24,12 @@ class DashboardController extends Controller
         ]);
     }
 
-    /** Distinct years present in the data, for the year/month pickers. */
+    /** Distinct UK calendar years present in the data, for the year/month pickers. */
     private function availableYears(): array
     {
-        $yearExpr = DB::connection()->getDriverName() === 'sqlite'
-            ? "strftime('%Y', date_created_gmt)"
-            : 'YEAR(date_created_gmt)';
+        $driver = DB::connection()->getDriverName();
+        $local = Clock::localSql('date_created_gmt', $driver);
+        $yearExpr = $driver === 'sqlite' ? "strftime('%Y', {$local})" : "YEAR({$local})";
 
         $years = Record::query()
             ->whereNotNull('date_created_gmt')
@@ -40,6 +41,6 @@ class DashboardController extends Controller
             ->values()
             ->all();
 
-        return $years !== [] ? $years : [(int) date('Y')];
+        return $years !== [] ? $years : [Clock::now()->year];
     }
 }

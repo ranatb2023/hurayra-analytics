@@ -490,11 +490,21 @@ export default (config = {}) => ({
         return 'bg-emerald-50 text-emerald-700';
     },
 
+    /**
+     * A stored "Y-m-d H:i:s" GMT stamp as an instant. Dates are shown on the
+     * UK calendar: 23:30 GMT on 30 Sep is 1 Oct to the business.
+     */
+    gmtInstant(value) {
+        if (!value) return null;
+        const d = new Date(`${String(value).replace(' ', 'T')}Z`);
+        return Number.isNaN(d.getTime()) ? null : d;
+    },
+
     /** Short date for the drill-down table. */
     shortDate(value) {
-        if (!value) return '—';
-        const [y, m, d] = String(value).split(' ')[0].split('-');
-        return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: '2-digit' });
+        const d = this.gmtInstant(value);
+        if (!d) return value ? String(value) : '—';
+        return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: '2-digit', timeZone: 'Europe/London' });
     },
 
     // --- one-time -> subscription upsell list ---
@@ -560,12 +570,11 @@ export default (config = {}) => ({
         return this.upsellMatches().slice(0, this.upsellShown);
     },
 
-    /** Format a stored "Y-m-d H:i:s" GMT stamp without shifting the day. */
+    /** Format a stored "Y-m-d H:i:s" GMT stamp as its UK calendar date. */
     dateLabel(value) {
-        if (!value) return '—';
-        const [y, m, d] = String(value).split(' ')[0].split('-');
-        if (!y || !m || !d) return String(value);
-        return new Date(+y, +m - 1, +d).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+        const d = this.gmtInstant(value);
+        if (!d) return value ? String(value) : '—';
+        return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Europe/London' });
     },
 
     daysLabel(days) {

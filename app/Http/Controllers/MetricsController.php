@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\MetricsService;
+use App\Support\Clock;
 use App\Support\PeriodResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -262,8 +263,8 @@ class MetricsController extends Controller
         $period = $this->resolver->resolve($this->validateFilter($request));
 
         $data = $this->metrics->churnedSubscriptions(
-            $period->start->toDateTimeString(),
-            $period->end->toDateTimeString(),
+            Clock::gmt($period->start),
+            Clock::gmt($period->end),
             limit: min(2000, max(1, (int) $request->integer('limit', 500))),
         );
 
@@ -276,8 +277,8 @@ class MetricsController extends Controller
         $period = $this->resolver->resolve($this->validateFilter($request));
 
         $data = $this->metrics->churnedSubscriptions(
-            $period->start->toDateTimeString(),
-            $period->end->toDateTimeString(),
+            Clock::gmt($period->start),
+            Clock::gmt($period->end),
         );
 
         $filename = 'hurayra-subscribers-lost-'.str_replace([' ', ':', '–', '/'], '-', $period->label).'.csv';
