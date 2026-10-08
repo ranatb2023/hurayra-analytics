@@ -16,3 +16,8 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - Trend buckets (day/week/month/year) shift GMT to UK wall time in SQL using the tz database's own DST transitions (`Clock::localSql()`), so no fixed +1 and no dependency on MySQL tz tables.
 - Month walks (subscriber history, retention, MRR), cohorts, the year picker, `subs:explain` and the dashboard's date labels all use UK dates.
 - A subscription created at 23:30 GMT on 30 Sep now counts in October. On the baseline data Sep = 79 and Oct = 2: the brief's 78 misses #20506, created at 00:47 BST on 1 Sep, which moves in from August.
+
+### P0-3: Data freshness banner
+- A strip at the top of every page shows the last import (or sync), the latest order's ID and UK time, and the dashboard order count against the source count.
+- Green under 12 hours since the last order, amber under 24, red beyond. On the baseline data it is red and names 1 Oct.
+- When the selected period extends past the data the strip adds "Data ends {date}. Figures after this are not real zeros."

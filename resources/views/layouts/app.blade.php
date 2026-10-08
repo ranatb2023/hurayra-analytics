@@ -56,6 +56,7 @@
 
     {{-- ------------------------------------------------------- top bar --}}
     <header class="no-print sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur-xl">
+        @include('partials.freshness')
         <div class="flex h-16 items-center gap-4 px-4 sm:px-6 lg:px-8">
             @hasSection('topbar')
                 @yield('topbar')

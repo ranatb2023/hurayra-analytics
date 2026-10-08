@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Record;
 use App\Support\Clock;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -60,5 +61,93 @@ class DataFreshness
         $data = $this->dataTimestamp();
 
         return $data !== null && $data->lt($now) ? $data : $now;
+    }
+
+    /** Hours without a new order before the banner turns amber, then red. */
+    public const WARN_AFTER_HOURS = 12;
+
+    public const STALE_AFTER_HOURS = 24;
+
+    /**
+     * The newest order in the data, or null when there are none.
+     *
+     * @return array{id:int, created_at:CarbonImmutable}|null
+     */
+    public function latestOrder(): ?array
+    {
+        $row = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->whereIn('status', Record::ORDER_STATUSES)
+            ->whereNotNull('date_created_gmt')
+            ->orderByDesc('date_created_gmt')
+            ->orderByDesc('id')
+            ->first(['id', 'date_created_gmt']);
+
+        return $row === null ? null : [
+            'id' => (int) $row->id,
+            'created_at' => Clock::toLocal((string) $row->date_created_gmt),
+        ];
+    }
+
+    /** Orders the dashboard counts: real order statuses only. */
+    public function dashboardOrderCount(): int
+    {
+        return DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->whereIn('status', Record::ORDER_STATUSES)
+            ->count();
+    }
+
+    /**
+     * Orders in the source, as WooCommerce's own "All" list would count them
+     * if it did not filter anything out: every order except the deleted and
+     * draft ones. A gap against {@see dashboardOrderCount()} is rows with a
+     * status that is not an order status (see the Data Health page).
+     *
+     * @return array{count:int, from:string}
+     */
+    public function sourceOrderCount(): array
+    {
+        return [
+            'count' => DB::table('records')
+                ->where('record_type', 'shop_order')
+                ->whereNotIn('status', Record::EXCLUDED_ORDER_STATUSES)
+                ->count(),
+            'from' => 'last import',
+        ];
+    }
+
+    /**
+     * Everything the freshness strip shows.
+     *
+     * `level` is green / amber / red from how long it has been since the last
+     * order: a store that normally takes orders every few hours and has had
+     * none for a day is either quiet or broken, and either way the numbers
+     * below the strip are not today's.
+     *
+     * @return array<string, mixed>
+     */
+    public function summary(): array
+    {
+        $now = Clock::now();
+        $latest = $this->latestOrder();
+        $hours = $latest === null ? null : (int) max(0, floor($latest['created_at']->diffInHours($now)));
+
+        return [
+            'now' => $now,
+            'last_import_at' => $this->lastImportAt(),
+            'last_sync_at' => $this->lastSyncAt(),
+            'data_timestamp' => $this->dataTimestamp(),
+            'latest_order' => $latest,
+            'hours_since_order' => $hours,
+            'dashboard_orders' => $this->dashboardOrderCount(),
+            'source_orders' => $this->sourceOrderCount(),
+            'level' => match (true) {
+                $hours === null => 'red',
+                $hours > self::STALE_AFTER_HOURS => 'red',
+                $hours > self::WARN_AFTER_HOURS => 'amber',
+                default => 'green',
+            },
+        ];
     }
 }

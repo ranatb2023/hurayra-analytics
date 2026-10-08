@@ -797,6 +797,18 @@ export default (config = {}) => ({
         return `as of ${new Date(+y, +m - 1, +d - 1).toLocaleDateString(undefined, fmt)}`;
     },
 
+    /**
+     * When the selected period runs past the data, say where the data stops.
+     * An October that has only been imported up to the 8th otherwise shows
+     * the rest of the month as zeros that look like a collapse.
+     */
+    dataEndsNote() {
+        if (!this.metrics?.snapshot_capped || !this.metrics.snapshot_at) return '';
+        const [y, m, d] = String(this.metrics.snapshot_at).split(' ')[0].split('-');
+        const when = new Date(+y, +m - 1, +d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+        return `Data ends ${when}. Figures after this are not real zeros.`;
+    },
+
     // --- sparklines (inline SVG path from a values array) ---
     sparkPath(values) {
         if (!values || values.length < 2) return '';
