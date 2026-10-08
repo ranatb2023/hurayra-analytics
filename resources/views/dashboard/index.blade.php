@@ -1580,7 +1580,7 @@
             ['click_rate', 'Click Rate', $icons['arrow_path'], 'from-indigo-400 to-violet-500', null, null],
             ['revenue', 'Revenue', $icons['dollar'], 'from-emerald-400 to-teal-500', 'Total order revenue (Placed Order) attributed to campaigns.', null],
             ['conversions', 'Orders', $icons['check_badge'], 'from-fuchsia-400 to-purple-500', 'Orders (Placed Order) attributed to campaigns.', null],
-            ['subscribers', 'New Subscribers', $icons['user_plus'], 'from-violet-400 to-fuchsia-500', 'New profiles that joined the newsletter list during the selected period (by list join date).', null],
+            ['subscribers', 'New list subscribers', $icons['user_plus'], 'from-violet-400 to-fuchsia-500', 'Email sign-ups: new profiles that joined the Klaviyo newsletter list during the selected period (by list join date). Not subscription customers — see New Subscribers on the Subscribers page for those.', null],
             ['sub_created_conversions', 'Subscriptions from Email', $icons['arrow_path'], 'from-indigo-400 to-violet-500', 'WC Subscription Created events attributed to campaigns — new subscriptions driven by email.', 'sub_created_revenue'],
             ['sub_renewal_conversions', 'Renewals from Email', $icons['arrow_path'], 'from-emerald-400 to-teal-500', 'WC Subscription Renewal events attributed to campaigns.', 'sub_renewal_revenue'],
         ];

@@ -102,3 +102,6 @@ All notable changes to Hurayra Analytics. One entry per audit task
 
 ### P2-6: Subscriber History "On hold / pending" column
 - Renamed **Net change on hold / pending**, with a tooltip giving the formula (active at start + new − churned − active at end) and explaining that a negative value means more subscriptions came back to Active than left it.
+
+### P2-7: Email "New Subscribers"
+- The Klaviyo tile is now **New list subscribers**: newsletter list sign-ups, not subscription customers. The tooltip says so.

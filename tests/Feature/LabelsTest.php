@@ -179,5 +179,8 @@ class LabelsTest extends TestCase
         $this->assertStringContainsString('Net change on hold / pending', $html);
         $this->assertStringContainsString('Negative means more came back than left', $html);
         $this->assertStringNotContainsString('>On hold / pending<', $html);
+
+        // The Klaviyo tile counts list sign-ups, not subscription customers.
+        $this->assertStringContainsString('New list subscribers', $html);
     }
 }
