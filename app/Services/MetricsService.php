@@ -438,6 +438,7 @@ class MetricsService
     {
         $firsts = DB::table('records')
             ->where('record_type', 'shop_order')
+            ->whereIn('status', Record::ORDER_STATUSES)
             ->whereNotNull('customer_id')
             ->whereNotNull('date_created_gmt')
             ->selectRaw('customer_id, MIN(date_created_gmt) as first_order')
@@ -605,11 +606,12 @@ class MetricsService
      */
     public function trendMetrics(): array
     {
-        // Trashed and draft orders are not business data anywhere else on the
-        // dashboard. Excluding them here too means a trend and the card above
-        // it are counting the same orders.
+        // Only real order statuses: trashed, draft and wrong-type rows (an
+        // order carrying a subscription status) are not business data
+        // anywhere else on the dashboard, so a trend and the card above it
+        // count the same orders.
         $orders = fn (Builder $q) => $q->where('record_type', 'shop_order')
-            ->whereNotIn('status', Record::EXCLUDED_ORDER_STATUSES);
+            ->whereIn('status', Record::ORDER_STATUSES);
         $completed = fn (Builder $q) => $orders($q)->where('status', 'completed');
         $renewals = fn (Builder $q) => $orders($q)->where('order_relationship', 'renewal');
 
@@ -1445,6 +1447,7 @@ class MetricsService
         // The product sits on the orders, not the subscription row.
         $product = DB::table('records')
             ->where('record_type', 'shop_order')
+            ->whereIn('status', Record::ORDER_STATUSES)
             ->whereNotNull('subscription_id')
             ->whereNotNull('primary_product')
             ->selectRaw('subscription_id, MAX(primary_product) as product')
@@ -1936,6 +1939,7 @@ class MetricsService
         // raw expression trips MySQL's ONLY_FULL_GROUP_BY.
         $oneTimeRows = DB::table('records')
             ->where('record_type', 'shop_order')
+            ->whereIn('status', Record::ORDER_STATUSES)
             ->where('order_relationship', 'one_time')
             ->whereNotNull('date_created_gmt')
             ->when($completedOnly, fn (Builder $q) => $q->where('status', 'completed'))
@@ -1957,6 +1961,7 @@ class MetricsService
         // each bucket is kept.
         $firstOneTimeOrder = DB::table('records')
             ->where('record_type', 'shop_order')
+            ->whereIn('status', Record::ORDER_STATUSES)
             ->where('order_relationship', 'one_time')
             ->whereNotNull('date_created_gmt')
             ->whereRaw("({$key}) IS NOT NULL")
@@ -2132,16 +2137,20 @@ class MetricsService
      * Orders created inside the window, excluding anything that is not business
      * data.
      *
-     * `trash` is a deleted order. Because "not completed" was defined as
-     * `status != 'completed'`, 26 deleted orders worth GBP 3,099 were being
-     * reported as failed business. Exclusion happens here so no caller can
-     * forget it; {@see unrecognisedStatuses()} surfaces what was dropped.
+     * Only real order statuses ({@see Record::ORDER_STATUSES}) are business
+     * data. `trash` is a deleted order: when "not completed" was defined as
+     * `status != 'completed'`, 26 deleted orders worth GBP 3,099 were reported
+     * as failed business. A subscription status on an order (three rows carry
+     * `wc-active`) is a data defect WP Admin hides, so the dashboard hides it
+     * too and lists it on the Data Health page instead. Exclusion happens here
+     * so no caller can forget it; {@see unrecognisedStatuses()} surfaces what
+     * was dropped.
      */
     private function ordersInWindow(string $start, string $end): Builder
     {
         return DB::table('records')
             ->where('record_type', 'shop_order')
-            ->whereNotIn('status', Record::EXCLUDED_ORDER_STATUSES)
+            ->whereIn('status', Record::ORDER_STATUSES)
             ->where('date_created_gmt', '>=', $start)
             ->where('date_created_gmt', '<', $end);
     }
@@ -2198,6 +2207,7 @@ class MetricsService
     {
         $lastOrder = DB::table('records')
             ->where('record_type', 'shop_order')
+            ->whereIn('status', Record::ORDER_STATUSES)
             ->whereNotNull('subscription_id')
             ->whereNotNull('date_created_gmt')
             ->selectRaw('subscription_id, MAX(date_created_gmt) as last_order_at')
@@ -2894,6 +2904,7 @@ class MetricsService
 
         $orders = DB::table('records')
             ->where('record_type', 'shop_order')
+            ->whereIn('status', Record::ORDER_STATUSES)
             ->whereNotNull('subscription_id')
             ->selectRaw('subscription_id, COUNT(*) as orders')
             ->selectRaw("SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders")

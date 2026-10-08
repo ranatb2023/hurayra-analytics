@@ -53,3 +53,7 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - ARPU is **per paying subscriber**: MRR ÷ subscribers who are active and have been billed at least once. The card shows the count ("235 paying of 243 active").
 - ARPU is carried at 4 decimal places (displayed in pennies), so ARPU × paying subscribers = MRR to the penny. Baseline: £18.5529 × 235 = £4,359.93.
 - MRR is built from the same subscribers as the Active card (`isActive()`), not the live status column.
+
+### P1-6: Invalid order statuses
+- Orders count only with a real order status (completed, processing, pending, on-hold, cancelled, failed, refunded). The three `shop_order` rows with the subscription status `wc-active` (#5209, #5230, #6049) are excluded from every metric and trend, as WP Admin excludes them. They are not modified.
+- The dashboard order count is now 3,987, matching WP Admin "All" (the source holds 3,990). The rows are listed on the Data Health page (P3-3).
