@@ -141,3 +141,13 @@ All notable changes to Hurayra Analytics. One entry per audit task
 
 ### Definition of done: KPI tooltips
 - Every KPI card and chip (40) and the Klaviyo delivery tiles now has a tooltip stating its exact formula. A test fails if a card is added without one.
+
+### Every table follows the period filter
+- The period filter used to update only the cards, the trend chart and Klaviyo. Every table was loaded once and then ignored it. Now:
+  - **Acquisition**: subscribers who signed up in the period, with an **All time** toggle (the view that reconciles with Overview active);
+  - **Cohort value / retention**: the 12 cohorts up to the selected month;
+  - **Subscriber History and its charts** (growth, churn, NRR, MRR): the 12 months ending at the selected month;
+  - **Top customers**: completed spend in the period;
+  - **One-time → subscription**: customers whose first one-off purchase was in the period (CSV export too).
+- The renewal pipeline, failed first renewals and campaign lists are work lists "as of today". They are labelled as not affected by the period filter.
+- Every table heading names the period it shows.

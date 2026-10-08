@@ -464,16 +464,19 @@ class MetricsService
     }
 
     /**
-     * Lifetime top customers by completed spend.
+     * Top customers by completed spend: inside [start, end) when given, else
+     * lifetime. Bounds are GMT strings.
      *
      * @return array<int, array{customer_id:int, orders:int, spend:float, email:?string}>
      */
-    public function topCustomers(int $limit = 10): array
+    public function topCustomers(int $limit = 10, ?string $start = null, ?string $end = null): array
     {
         return DB::table('records')
             ->where('record_type', 'shop_order')
             ->where('status', 'completed')
             ->whereNotNull('customer_id')
+            ->when($start !== null, fn (Builder $q) => $q->where('date_created_gmt', '>=', $start))
+            ->when($end !== null, fn (Builder $q) => $q->where('date_created_gmt', '<', $end))
             ->selectRaw('customer_id, COUNT(*) as orders, SUM(total_amount) as spend, MAX(billing_email) as email')
             ->groupBy('customer_id')
             ->orderByDesc('spend')
@@ -753,7 +756,7 @@ class MetricsService
      * @param  int  $months  how many trailing months to return (1–60)
      * @return array{rows: array<int, array{month:string, active_start:int, new:int, churned:int, paused:int, active_end:int, churn_rate:?float, partial:bool}>, end_date_coverage: ?float}
      */
-    public function churnSeries(int $months = self::CHURN_SERIES_MONTHS): array
+    public function churnSeries(int $months = self::CHURN_SERIES_MONTHS, ?CarbonImmutable $until = null): array
     {
         $months = max(1, min(60, $months));
 
@@ -764,7 +767,9 @@ class MetricsService
         }
 
         $latest = $this->latestDataInstant();
-        $lastMonth = $latest->startOfMonth();
+        // The selected period's month when one is given, never past the data.
+        $anchor = $until !== null && $until->lt($latest) ? $until->setTimezone(Clock::tz()) : $latest;
+        $lastMonth = $anchor->startOfMonth();
         $firstMonth = $lastMonth->subMonths($months - 1);
 
         $rows = [];
@@ -964,7 +969,7 @@ class MetricsService
      * @param  int  $months  trailing months to return (1-60)
      * @return array{rows: array<int, array{month:string, churn_net:?float, nrr:?float, partial:bool}>}
      */
-    public function retentionSeries(int $months = self::CHURN_SERIES_MONTHS): array
+    public function retentionSeries(int $months = self::CHURN_SERIES_MONTHS, ?CarbonImmutable $until = null): array
     {
         $months = max(1, min(60, $months));
 
@@ -977,7 +982,9 @@ class MetricsService
         $payments = $this->completedPaymentsBySubscription();
 
         $latest = $this->latestDataInstant();
-        $lastMonth = $latest->startOfMonth();
+        // The selected period's month when one is given, never past the data.
+        $anchor = $until !== null && $until->lt($latest) ? $until->setTimezone(Clock::tz()) : $latest;
+        $lastMonth = $anchor->startOfMonth();
         $firstMonth = $lastMonth->subMonths($months - 1);
 
         $rows = [];
@@ -1057,11 +1064,11 @@ class MetricsService
      * @param  int  $months  trailing months to return (1-60)
      * @return array{rows: array<int, array<string, mixed>>, end_date_coverage: ?float}
      */
-    public function history(int $months = self::CHURN_SERIES_MONTHS): array
+    public function history(int $months = self::CHURN_SERIES_MONTHS, ?CarbonImmutable $until = null): array
     {
-        $churn = $this->churnSeries($months);
-        $rates = array_column($this->retentionSeries($months)['rows'], null, 'month');
-        $money = array_column($this->mrrSeries($months)['rows'], null, 'month');
+        $churn = $this->churnSeries($months, $until);
+        $rates = array_column($this->retentionSeries($months, $until)['rows'], null, 'month');
+        $money = array_column($this->mrrSeries($months, $until)['rows'], null, 'month');
 
         $rows = array_map(function (array $row) use ($rates, $money) {
             $rate = $rates[$row['month']] ?? [];
@@ -1121,7 +1128,7 @@ class MetricsService
      * @param  int  $months  trailing months to return (1-60)
      * @return array{rows: array<int, array{month:string, mrr:float, arr:float, arpu:?float, paying:int, partial:bool}>}
      */
-    public function mrrSeries(int $months = self::CHURN_SERIES_MONTHS): array
+    public function mrrSeries(int $months = self::CHURN_SERIES_MONTHS, ?CarbonImmutable $until = null): array
     {
         $months = max(1, min(60, $months));
 
@@ -1141,7 +1148,9 @@ class MetricsService
         $payments = $this->completedPaymentsBySubscription();
 
         $latest = $this->latestDataInstant();
-        $lastMonth = $latest->startOfMonth();
+        // The selected period's month when one is given, never past the data.
+        $anchor = $until !== null && $until->lt($latest) ? $until->setTimezone(Clock::tz()) : $latest;
+        $lastMonth = $anchor->startOfMonth();
         $firstMonth = $lastMonth->subMonths($months - 1);
 
         $rows = [];
@@ -1247,7 +1256,7 @@ class MetricsService
      * @param  int  $min  segments smaller than this are folded into one "Other" row
      * @return array{dimension:string, rows:array<int, array<string, mixed>>, totals:array{subs:int, still_active:int}}
      */
-    public function segmentPerformance(string $dimension = 'channel', int $min = 5): array
+    public function segmentPerformance(string $dimension = 'channel', int $min = 5, ?string $start = null, ?string $end = null): array
     {
         if (! in_array($dimension, self::SEGMENT_VIEWS, true)) {
             $dimension = 'utm_source';
@@ -1281,6 +1290,11 @@ class MetricsService
             ->selectRaw('s.id, s.'.$column.' as segment, COALESCE(p.payments, 0) as payments, COALESCE(p.revenue, 0) as revenue')
             ->selectRaw('s.date_created_gmt as created, s.billing_period, s.billing_interval, s.next_payment_at')
             ->selectRaw('s.utm_medium, s.attribution_type')
+            // Optional sign-up window (GMT): "subscribers acquired in this
+            // period". Without one, the whole book -- which is what reconciles
+            // with the Overview's active count.
+            ->when($start !== null, fn (Builder $q) => $q->where('s.date_created_gmt', '>=', $start))
+            ->when($end !== null, fn (Builder $q) => $q->where('s.date_created_gmt', '<', $end))
             ->get();
 
         // Group in PHP: "still active" is the shared isActive() rule, which no
@@ -2013,7 +2027,7 @@ class MetricsService
      *
      * @return array{rows: array<int, array<string, mixed>>}
      */
-    public function cohortValue(int $maxCohorts = 12): array
+    public function cohortValue(int $maxCohorts = 12, ?string $untilMonth = null): array
     {
         $spend = [];
 
@@ -2057,6 +2071,11 @@ class MetricsService
         }
 
         krsort($cohorts);
+
+        // Anchored on the selected period: no cohort newer than its month.
+        if ($untilMonth !== null) {
+            $cohorts = array_filter($cohorts, fn ($month) => (string) $month <= $untilMonth, ARRAY_FILTER_USE_KEY);
+        }
 
         // Cohorts older than the window are summed into one "Earlier" row, so
         // the "still active" column adds up to the active subscriber count
@@ -2152,7 +2171,7 @@ class MetricsService
      *
      * @return array{offsets:int[], rows:array<int,array{cohort:string,size:int,cells:array<int,?array{count:int,pct:float,partial:bool}>,activity:array<int,array{count:int,pct:float}>}>}
      */
-    public function cohortRetention(int $maxOffset = 6, int $maxCohorts = 12): array
+    public function cohortRetention(int $maxOffset = 6, int $maxCohorts = 12, ?string $untilMonth = null): array
     {
         $asOf = $this->asOfGmt();
         $book = $this->lifecycleSubs();
@@ -2163,7 +2182,11 @@ class MetricsService
         }
 
         krsort($members); // most recent first
-        $cohorts = array_slice(array_keys($members), 0, $maxCohorts);
+        $keys = array_keys($members);
+        if ($untilMonth !== null) {
+            $keys = array_values(array_filter($keys, fn ($month) => (string) $month <= $untilMonth));
+        }
+        $cohorts = array_slice($keys, 0, $maxCohorts);
         sort($cohorts);   // display oldest -> newest
 
         $activity = $this->cohortOrderActivity($book, $cohorts, $maxOffset);
@@ -2294,7 +2317,7 @@ class MetricsService
      * @param  int  $limit  max rows returned (0 = all); the summary always counts everything
      * @return array{customers: array<int, array<string, mixed>>, summary: array<string, mixed>, total: int}
      */
-    public function oneTimeToSubscription(bool $conversionsOnly = true, bool $includeSameDay = false, int $limit = 0): array
+    public function oneTimeToSubscription(bool $conversionsOnly = true, bool $includeSameDay = false, int $limit = 0, ?string $start = null, ?string $end = null): array
     {
         $key = $this->customerKeyExpr();
         $purchase = fn (Builder $q) => $q->where('status', 'completed')->where('total_amount', '>', 0);
@@ -2363,6 +2386,14 @@ class MetricsService
             ->groupBy('ckey')
             ->get()
             ->keyBy('ckey');
+
+        // With a window: the customers whose FIRST one-off purchase was in it,
+        // followed to today. A cohort, so the conversion rate stays a rate of
+        // the same people.
+        if ($start !== null || $end !== null) {
+            $oneTime = $oneTime->filter(fn ($ot) => ($start === null || (string) $ot->first_at >= $start)
+                && ($end === null || (string) $ot->first_at < $end));
+        }
 
         $rows = [];
         $converted = 0;

@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Services\MetricsService;
 use App\Support\Clock;
+use App\Support\Period;
 use App\Support\PeriodResolver;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -79,28 +81,41 @@ class MetricsController extends Controller
     public function topCustomers(Request $request): JsonResponse
     {
         $limit = (int) $request->integer('limit', 10);
+        $period = $this->optionalPeriod($request);
 
         return response()->json([
-            'customers' => $this->metrics->topCustomers(min(50, max(1, $limit))),
+            'customers' => $this->metrics->topCustomers(
+                min(50, max(1, $limit)),
+                $period ? Clock::gmt($period->start) : null,
+                $period ? Clock::gmt($period->end) : null,
+            ),
+            'period' => $period?->toArray(),
         ]);
     }
 
     /** AJAX endpoint: customers who bought one-off first, then subscribed. */
     public function oneTimeToSubscription(Request $request): JsonResponse
     {
+        $period = $this->optionalPeriod($request);
+
         return response()->json($this->metrics->oneTimeToSubscription(
             conversionsOnly: $request->boolean('conversions_only', true),
             includeSameDay: $request->boolean('include_same_day'),
             limit: min(5000, max(1, (int) $request->integer('limit', 500))),
-        ));
+            start: $period ? Clock::gmt($period->start) : null,
+            end: $period ? Clock::gmt($period->end) : null,
+        ) + ['period' => $period?->toArray()]);
     }
 
     /** Download the full one-time → subscription list (no row cap). */
     public function oneTimeToSubscriptionExport(Request $request): StreamedResponse
     {
+        $period = $this->optionalPeriod($request);
         $data = $this->metrics->oneTimeToSubscription(
             conversionsOnly: $request->boolean('conversions_only', true),
             includeSameDay: $request->boolean('include_same_day'),
+            start: $period ? Clock::gmt($period->start) : null,
+            end: $period ? Clock::gmt($period->end) : null,
         );
 
         return response()->streamDownload(function () use ($data) {
@@ -143,7 +158,7 @@ class MetricsController extends Controller
     {
         $offset = min(12, max(1, (int) $request->integer('offset', 6)));
 
-        return response()->json($this->metrics->cohortRetention($offset));
+        return response()->json($this->metrics->cohortRetention($offset, 12, $this->untilMonth($request)));
     }
 
     /** AJAX endpoint: lifetime value by sign-up month. */
@@ -151,16 +166,22 @@ class MetricsController extends Controller
     {
         $cohorts = min(24, max(1, (int) $request->integer('cohorts', 12)));
 
-        return response()->json($this->metrics->cohortValue($cohorts));
+        return response()->json($this->metrics->cohortValue($cohorts, $this->untilMonth($request)));
     }
 
     /** AJAX endpoint: acquisition-segment performance (channel, device, cycle). */
     public function segments(Request $request): JsonResponse
     {
+        // scope=all: the whole book (reconciles with the Overview's active
+        // count). Otherwise, with a period: subscribers who signed up in it.
+        $period = $request->string('scope')->toString() === 'all' ? null : $this->optionalPeriod($request);
+
         return response()->json($this->metrics->segmentPerformance(
             $request->string('dimension', 'channel')->toString(),
             min(100, max(1, (int) $request->integer('min', 5))),
-        ) + ['dimensions' => MetricsService::SEGMENT_VIEWS]);
+            $period ? Clock::gmt($period->start) : null,
+            $period ? Clock::gmt($period->end) : null,
+        ) + ['dimensions' => MetricsService::SEGMENT_VIEWS, 'period' => $period?->toArray()]);
     }
 
     /** AJAX endpoint: the live renewal pipeline for the next N days. */
@@ -260,7 +281,7 @@ class MetricsController extends Controller
     {
         $months = min(60, max(1, (int) $request->integer('months', 12)));
 
-        return response()->json($this->metrics->history($months));
+        return response()->json($this->metrics->history($months, $this->lastInstant($request)));
     }
 
     /** AJAX endpoint: month-by-month subscriber history and churn rate. */
@@ -268,7 +289,7 @@ class MetricsController extends Controller
     {
         $months = min(60, max(1, (int) $request->integer('months', 12)));
 
-        return response()->json($this->metrics->churnSeries($months));
+        return response()->json($this->metrics->churnSeries($months, $this->lastInstant($request)));
     }
 
     /** AJAX endpoint: the subscriptions behind the period's churn number. */
@@ -433,6 +454,32 @@ class MetricsController extends Controller
                 ]);
             }
         }, $filename, ['Content-Type' => 'text/csv']);
+    }
+
+    /**
+     * The period the filter bar selected, when the request carries one. The
+     * table endpoints accept the same parameters as the cards, so every panel
+     * can follow the filter; without them they fall back to all time.
+     */
+    private function optionalPeriod(Request $request): ?Period
+    {
+        if (! $request->filled('granularity')) {
+            return null;
+        }
+
+        return $this->resolver->resolve($this->validateFilter($request));
+    }
+
+    /** The last instant inside the selected period, for month walks; null = up to the data. */
+    private function lastInstant(Request $request): ?CarbonImmutable
+    {
+        return $this->optionalPeriod($request)?->end->subSecond();
+    }
+
+    /** The UK month ('Y-m') the selected period ends in, for cohort tables. */
+    private function untilMonth(Request $request): ?string
+    {
+        return $this->lastInstant($request)?->format('Y-m');
     }
 
     /**

@@ -56,7 +56,9 @@ export default (config = {}) => ({
     // Lifetime value by sign-up month (period-independent).
     cohortValue: { rows: [] },
     // Acquisition-segment performance; dimension is user-switchable.
-    segments: { dimension: 'channel', rows: [], dimensions: [], totals: null, loading: false },
+    // scope: 'period' = subscribers who signed up in the selected period;
+    // 'all' = the whole book (what reconciles with the Overview).
+    segments: { dimension: 'channel', scope: 'period', rows: [], dimensions: [], totals: null, loading: false },
     // The live renewal pipeline.
     renewals: { days: 14, total: 0, at_first_renewal: 0, value: 0, rows: [], failed: { total: 0, value: 0, rows: [] }, loading: false },
     // Campaign audiences: lists you can push straight to Klaviyo.
@@ -100,17 +102,12 @@ export default (config = {}) => ({
         this.$watch('month', () => { this.clampWeek(); this.apply(); });
         this.$watch('year', () => { this.clampWeek(); this.apply(); });
         this.$watch('view', (v) => this.renderChartsFor(v));
+        // refresh() also loads every table that follows the period filter.
         this.refresh();
-        // Period-independent panels — fetch once.
+        // Live work lists, "as of today" whatever the period — fetch once.
         this.fetchSparklines();
-        this.fetchTopCustomers();
-        this.fetchCohorts();
-        this.fetchCohortValue();
-        this.fetchSegments();
         this.fetchRenewals();
         this.fetchAudience();
-        this.fetchChurn();
-        this.fetchUpsell();
         this.$nextTick(() => this.trackSections());
     },
 
@@ -191,6 +188,23 @@ export default (config = {}) => ({
             this.loading = false;
         }
         this.fetchKlaviyo(); // independent source; don't block the core metrics
+
+        // The tables follow the filter too. Each fails quietly on its own so
+        // one slow panel cannot blank the cards.
+        this.fetchSegments();
+        this.fetchCohorts();
+        this.fetchCohortValue();
+        this.fetchChurn();
+        this.fetchTopCustomers();
+        this.fetchUpsell();
+    },
+
+    /** The filter bar's period alone (no compare/strict), for the table endpoints. */
+    periodQuery() {
+        const p = this.filterParams();
+        p.delete('compare');
+        p.delete('strict');
+        return p.toString();
     },
 
     async fetchSummary() {
@@ -220,23 +234,24 @@ export default (config = {}) => ({
 
     async fetchTopCustomers() {
         try {
-            const res = await fetch('/api/metrics/top-customers?limit=10', { headers: { Accept: 'application/json' } });
+            const res = await fetch(`/api/metrics/top-customers?limit=10&${this.periodQuery()}`, { headers: { Accept: 'application/json' } });
             if (res.ok) this.topCustomers = (await res.json()).customers ?? [];
         } catch (_) { /* non-critical */ }
     },
 
     async fetchCohorts() {
         try {
-            const res = await fetch('/api/metrics/cohorts?offset=6', { headers: { Accept: 'application/json' } });
+            const res = await fetch(`/api/metrics/cohorts?offset=6&${this.periodQuery()}`, { headers: { Accept: 'application/json' } });
             if (res.ok) this.cohorts = await res.json();
         } catch (_) { /* non-critical */ }
     },
 
-    async fetchSegments(dimension = null) {
+    async fetchSegments(dimension = null, scope = null) {
         if (dimension) this.segments.dimension = dimension;
+        if (scope) this.segments.scope = scope;
         this.segments.loading = true;
         try {
-            const res = await fetch(`/api/metrics/segments?dimension=${this.segments.dimension}&min=5`,
+            const res = await fetch(`/api/metrics/segments?dimension=${this.segments.dimension}&min=5&scope=${this.segments.scope}&${this.periodQuery()}`,
                 { headers: { Accept: 'application/json' } });
             if (res.ok) {
                 const d = await res.json();
@@ -323,7 +338,7 @@ export default (config = {}) => ({
 
     async fetchCohortValue() {
         try {
-            const res = await fetch('/api/metrics/cohort-value?cohorts=12', { headers: { Accept: 'application/json' } });
+            const res = await fetch(`/api/metrics/cohort-value?cohorts=12&${this.periodQuery()}`, { headers: { Accept: 'application/json' } });
             if (res.ok) this.cohortValue = await res.json();
         } catch (_) { /* non-critical */ }
     },
@@ -364,7 +379,7 @@ export default (config = {}) => ({
         try {
             // /history is /churn plus net churn and NRR per month: the charts
             // and the table below them read from the same rows.
-            const res = await fetch('/api/metrics/history?months=12', { headers: { Accept: 'application/json' } });
+            const res = await fetch(`/api/metrics/history?months=12&${this.periodQuery()}`, { headers: { Accept: 'application/json' } });
             if (res.ok) {
                 const data = await res.json();
                 this.churn = { rows: data.rows ?? [], coverage: data.end_date_coverage ?? null };
@@ -542,7 +557,7 @@ export default (config = {}) => ({
 
     // --- one-time -> subscription upsell list ---
     upsellParams() {
-        const p = new URLSearchParams();
+        const p = new URLSearchParams(this.periodQuery());
         p.set('conversions_only', this.upsellConversionsOnly ? '1' : '0');
         p.set('include_same_day', this.upsellIncludeSameDay ? '1' : '0');
         return p;
@@ -1374,6 +1389,18 @@ export default (config = {}) => ({
         const [y, m] = String(ym).split('-');
         if (!y || !m) return String(ym);
         return new Date(y, m - 1, 1).toLocaleString(undefined, { month: 'short', year: '2-digit' });
+    },
+
+    /** The month the 12-month history ends at (the selected period's month). */
+    historyEndLabel() {
+        const rows = this.churn.rows ?? [];
+        return rows.length ? this.cohortMonthLabel(rows[rows.length - 1].month) : '…';
+    },
+
+    /** The newest cohort shown (cohort tables stop at the selected period). */
+    cohortsEndLabel() {
+        const months = (this.cohortValue.rows ?? []).filter((r) => !r.rollup).map((r) => r.cohort);
+        return months.length ? this.cohortMonthLabel(months[0]) : '…';
     },
 
     /** The rolled-up row of every cohort older than the table shows. */

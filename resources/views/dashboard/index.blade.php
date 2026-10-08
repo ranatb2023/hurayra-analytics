@@ -373,7 +373,7 @@
                 <div class="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
                     <div>
                         <h3 class="text-sm font-bold text-slate-700">Where subscribers come from</h3>
-                        <p class="text-[11px] text-slate-500">lifetime, by reaching a second payment</p>
+                        <p class="text-[11px] text-slate-500">signed up in <span x-text="periodLabel"></span>, by reaching a second payment</p>
                     </div>
                     <button type="button" @click="view = 'acquisition'"
                             class="shrink-0 text-xs font-semibold text-slate-400 transition hover:text-slate-700">All →</button>
@@ -434,7 +434,7 @@
     <div class="mt-4 print-block rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm"
          x-show="churn.rows.length" x-cloak>
         <h3 class="text-sm font-bold text-slate-700">
-            Subscriber Growth <span class="font-medium text-slate-400">· last 12 months</span>
+            Subscriber Growth <span class="font-medium text-slate-400">· 12 months to <span x-text="historyEndLabel()"></span></span>
         </h3>
         <p class="mt-1 text-xs text-slate-500">
             Sign-ups above the line, subscribers lost below it, and the size of the book at each month's end.
@@ -686,7 +686,7 @@
         <div class="print-block rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm">
             <div class="flex items-start justify-between gap-3">
                 <h3 class="text-sm font-bold text-slate-700">
-                    Churn Rate <span class="font-medium text-slate-400">· last 12 months</span>
+                    Churn Rate <span class="font-medium text-slate-400">· 12 months to <span x-text="historyEndLabel()"></span></span>
                 </h3>
                 {{-- 50-75 sign-ups a month: one bad fortnight swings the rate by
                      ten points, so the raw line overstates how much changed. --}}
@@ -707,7 +707,7 @@
 
         <div class="print-block rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm">
             <h3 class="text-sm font-bold text-slate-700">
-                Net Revenue Retention <span class="font-medium text-slate-400">· last 12 months</span>
+                Net Revenue Retention <span class="font-medium text-slate-400">· 12 months to <span x-text="historyEndLabel()"></span></span>
             </h3>
             <p class="mt-1 text-xs text-slate-500">
                 What last month's subscribers are still worth this month. Above the 100% line the book grows without a
@@ -726,7 +726,7 @@
     <div class="mt-4 print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm" x-show="churn.rows.length" x-cloak>
         <div class="border-b border-slate-100 p-5">
             <h3 class="text-sm font-bold text-slate-700">
-                Subscriber History <span class="font-medium text-slate-400">· last 12 months</span>
+                Subscriber History <span class="font-medium text-slate-400">· 12 months to <span x-text="historyEndLabel()"></span></span>
             </h3>
             <p class="mt-1 text-xs text-slate-500">
                 Each month is counted from the sign-up and end dates of every subscription, so a closed month never
@@ -804,18 +804,31 @@
     {{-- Retention split by where the subscriber came from. Until this existed the
          dashboard could say the book was leaking but never which tap it came
          out of, so spend could not be judged against what it bought. --}}
-    <div class="print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm"
-         x-show="segments.rows.length" x-cloak>
+    <div class="print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm">
         <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 p-5">
             <div>
-                <h3 class="text-sm font-bold text-slate-700">Retention by Acquisition Segment</h3>
+                <h3 class="text-sm font-bold text-slate-700">
+                    Retention by Acquisition Segment
+                    <span class="font-medium text-slate-400"
+                          x-text="segments.scope === 'all' ? '· all time' : `· signed up in ${periodLabel}`"></span>
+                </h3>
                 <p class="mt-1 text-xs text-slate-500">
                     Reaching a <span class="font-semibold text-slate-600">second payment</span> is the column that
                     matters — it predicts lifetime value earlier than anything else, and about half of all payers
                     never get there. Lifetime value counts every order the subscription ever generated.
                 </p>
             </div>
-            <div class="no-print flex flex-wrap gap-1">
+            <div class="no-print flex flex-wrap items-center gap-1">
+                {{-- Period = who was acquired then; All time = the whole book,
+                     which is the view that reconciles with the Overview. --}}
+                <div class="mr-2 flex overflow-hidden rounded-lg border border-slate-200">
+                    <template x-for="opt in [{ value: 'period', label: 'This period' }, { value: 'all', label: 'All time' }]" :key="opt.value">
+                        <button type="button" @click="fetchSegments(null, opt.value)"
+                                class="px-2.5 py-1 text-xs font-semibold transition"
+                                :class="segments.scope === opt.value ? 'bg-slate-900 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'"
+                                x-text="opt.label"></button>
+                    </template>
+                </div>
                 <template x-for="d in segments.dimensions" :key="d">
                     <button type="button" @click="fetchSegments(d)"
                             class="rounded-lg px-2.5 py-1 text-xs font-semibold transition"
@@ -881,12 +894,17 @@
                             </td>
                         </tr>
                     </template>
+                    <tr x-show="! segments.loading && ! segments.rows.length" x-cloak>
+                        <td colspan="7" class="px-5 py-8 text-center text-sm text-slate-400">
+                            Nobody signed up in <span x-text="periodLabel"></span>. Switch to All time to see the whole book.
+                        </td>
+                    </tr>
                 </tbody>
                 {{-- Every subscription is in exactly one row, so these match
                      the Overview's active count. --}}
-                <tfoot x-show="segments.totals" class="border-t border-slate-200 bg-slate-50/70 text-sm font-semibold">
+                <tfoot x-show="segments.rows.length && segments.totals" class="border-t border-slate-200 bg-slate-50/70 text-sm font-semibold">
                     <tr>
-                        <td class="px-5 py-2.5 text-slate-500">All subscriptions</td>
+                        <td class="px-5 py-2.5 text-slate-500" x-text="segments.scope === 'all' ? 'All subscriptions' : 'All sign-ups in the period'"></td>
                         <td class="px-5 py-2.5 text-right tabular-nums text-slate-700" x-text="segments.totals?.subs"></td>
                         <td></td>
                         <td class="px-5 py-2.5 text-right tabular-nums text-emerald-600" x-text="segments.totals?.still_active"
@@ -905,7 +923,9 @@
          x-show="renewals.total > 0" x-cloak>
         <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 p-5">
             <div>
-                <h3 class="text-sm font-bold text-slate-700">Renewal Pipeline</h3>
+                <h3 class="text-sm font-bold text-slate-700">
+                    Renewal Pipeline <span class="font-medium text-slate-400">· from today, not affected by the period filter</span>
+                </h3>
                 <p class="mt-1 text-xs text-slate-500">
                     <span class="font-bold text-slate-700" x-text="renewals.total"></span> subscriptions renew in the next
                     <span x-text="renewals.days"></span> days, worth
@@ -1032,7 +1052,7 @@
 
     {{-- Top customers (lifetime), full width --}}
     <div class="mt-4 print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm" x-show="topCustomers.length" x-cloak>
-        <h3 class="text-sm font-bold text-slate-700">Top Customers <span class="font-medium text-slate-400">· lifetime completed spend</span></h3>
+        <h3 class="text-sm font-bold text-slate-700">Top Customers <span class="font-medium text-slate-400">· completed spend in <span x-text="periodLabel"></span></span></h3>
         <div class="mt-3 overflow-x-auto">
             <table class="min-w-full text-sm">
                 <thead class="text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -1060,7 +1080,10 @@
     <div class="print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm">
         <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 p-5">
             <div class="min-w-0">
-                <h3 class="text-sm font-bold text-slate-700" x-text="audience.label || 'Campaign lists'"></h3>
+                <h3 class="text-sm font-bold text-slate-700">
+                    <span x-text="audience.label || 'Campaign lists'"></span>
+                    <span class="font-medium text-slate-400">· as of today, not affected by the period filter</span>
+                </h3>
                 <p class="mt-1 text-xs text-slate-500">
                     <span class="font-bold text-slate-700" x-text="audience.total"></span> customers
                     <span x-show="audience.subscriptions > audience.total" class="text-slate-400">
@@ -1134,7 +1157,7 @@
             <div class="min-w-0">
                 <h3 class="text-sm font-bold text-slate-700">
                     Customers who bought one-off first, then subscribed
-                    <span class="font-medium text-slate-400">· all time</span>
+                    <span class="font-medium text-slate-400">· first one-off purchase in <span x-text="periodLabel"></span></span>
                 </h3>
                 <p class="mt-1 text-xs text-slate-500">
                     Matched on billing email (falling back to customer ID). A one-time purchase is a completed order over
@@ -1287,7 +1310,7 @@
     <div class="mb-4 print-block rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm"
          x-show="churn.rows.length" x-cloak>
         <h3 class="text-sm font-bold text-slate-700">
-            Recurring Revenue <span class="font-medium text-slate-400">· last 12 months</span>
+            Recurring Revenue <span class="font-medium text-slate-400">· 12 months to <span x-text="historyEndLabel()"></span></span>
         </h3>
         <p class="mt-1 text-xs text-slate-500">
             Every subscription active at each month's end, priced at its most recent payment and normalised to 30 days.
@@ -1473,6 +1496,7 @@
         <div class="border-b border-slate-100 p-5">
             <h3 class="text-sm font-bold text-slate-700">
                 Lifetime Value by Sign-up Month
+                <span class="font-medium text-slate-400">· 12 cohorts to <span x-text="cohortsEndLabel()"></span></span>
             </h3>
             <p class="mt-1 text-xs text-slate-500">
                 What each intake has earned, all orders counted. Read against what it costs to acquire a subscriber:
@@ -1530,7 +1554,7 @@
         <div class="flex flex-wrap items-baseline justify-between gap-3">
             <div>
                 <h2 class="text-base font-bold tracking-tight text-slate-900"
-                    x-text="cohortMode === 'survival' ? 'Cohort Retention' : 'Cohort Order Activity'"></h2>
+                    x-text="(cohortMode === 'survival' ? 'Cohort Retention' : 'Cohort Order Activity') + ' · to ' + cohortsEndLabel()"></h2>
                 <p class="mt-0.5 text-xs text-slate-500" x-show="cohortMode === 'survival'">
                     Of subscribers who signed up each month, the % not yet cancelled or expired at the end of month N.
                     A subscriber on hold has not left, so the curve can only stay flat or fall.
