@@ -91,6 +91,9 @@ class SyncKlaviyoMetrics implements ShouldQueue
                     $attributes['flow_delivery_rate'] = $flow['delivery_rate'];
                     $attributes['flow_open_rate'] = $flow['open_rate'];
                     $attributes['flow_click_rate'] = $flow['click_rate'];
+                    $attributes['flow_delivered'] = $flow['delivered'];
+                    $attributes['flow_opens_unique'] = $flow['opens_unique'];
+                    $attributes['flow_clicks_unique'] = $flow['clicks_unique'];
                     $attributes['flow_revenue'] = $flow['revenue'];
                     $attributes['flow_conversions'] = $flow['conversions'];
                 } catch (Throwable $e) {

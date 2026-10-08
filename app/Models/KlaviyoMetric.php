@@ -9,6 +9,7 @@ class KlaviyoMetric extends Model
     protected $fillable = [
         'granularity', 'period_start', 'period_end',
         'delivery_rate', 'open_rate', 'click_rate', 'revenue', 'conversions', 'subscribers',
+        'delivered', 'opens_unique', 'clicks_unique', 'flow_delivered', 'flow_opens_unique', 'flow_clicks_unique',
         'sub_created_conversions', 'sub_created_revenue', 'sub_renewal_conversions', 'sub_renewal_revenue',
         'flow_delivery_rate', 'flow_open_rate', 'flow_click_rate', 'flow_revenue', 'flow_conversions',
         'flow_sub_created_conversions', 'flow_sub_created_revenue', 'flow_sub_renewal_conversions', 'flow_sub_renewal_revenue',

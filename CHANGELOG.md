@@ -114,3 +114,10 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - Acquisition defaults to a **Channel** view. Hovering a channel shows the raw sources behind it. Unmapped sources go to **Other** and are listed on the Channel rules screen (and on Data Health). Raw columns are still available as other views.
 - Totals still reconcile with P1-4. Baseline: 973 subscriptions, 243 active, in 9 channels.
 - Requires `php artisan migrate`.
+
+### P3-2: Klaviyo click tracking
+- The Klaviyo field mapping (`clicks_unique`, `opens_unique`, `delivered`) was already correct, and earlier months do show clicks (0.2–1.1%). The 0% came from precision: rates were rounded and stored to one decimal place, so a 0.04% campaign click rate was saved as 0.0%.
+- Rates are now kept to two decimals, and the counts behind them are stored and shown under the tile ("3 of 8,000 delivered"), so a real zero can be told apart from a small rate.
+- The API revision default moves from 2025-01-15 to **2026-07-15** (current GA). No revision in between changed the reports, list, metrics or account endpoints this app calls. **A local `.env` that sets `KLAVIYO_REVISION=2025-01-15` overrides this and should be updated.**
+- Open-rate tooltips say the figure is inflated by Apple Mail privacy.
+- Requires `php artisan migrate`; the next sync fills the new columns.

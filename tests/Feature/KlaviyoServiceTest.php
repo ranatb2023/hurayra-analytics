@@ -43,12 +43,36 @@ class KlaviyoServiceTest extends TestCase
 
         // delivered 1750 / recipients 2000
         $this->assertSame(87.5, $agg['delivery_rate']);
-        // opens_unique 600 / delivered 1750
-        $this->assertSame(34.3, $agg['open_rate']);
+        // opens_unique 600 / delivered 1750 (two decimals)
+        $this->assertSame(34.29, $agg['open_rate']);
         // clicks_unique 150 / delivered 1750
-        $this->assertSame(8.6, $agg['click_rate']);
+        $this->assertSame(8.57, $agg['click_rate']);
         $this->assertSame(800.5, $agg['revenue']);
         $this->assertSame(30, $agg['conversions']);
+        // The counts the rates come from.
+        $this->assertSame(1750, $agg['delivered']);
+        $this->assertSame(150, $agg['clicks_unique']);
+    }
+
+    public function test_a_small_click_rate_is_not_rounded_to_zero(): void
+    {
+        // 3 unique clicks on 8,000 delivered: 0.04%, which one decimal made 0.0%.
+        $agg = (new KlaviyoService)->aggregate([['statistics' => [
+            'recipients' => 8100, 'delivered' => 8000, 'opens_unique' => 4400, 'clicks_unique' => 3,
+        ]]]);
+
+        $this->assertSame(0.04, $agg['click_rate']);
+        $this->assertSame(55.0, $agg['open_rate']);
+        $this->assertSame(3, $agg['clicks_unique']);
+    }
+
+    public function test_the_default_revision_is_current(): void
+    {
+        // The shipped default (a local .env may still pin an older one).
+        $this->assertStringContainsString(
+            "env('KLAVIYO_REVISION', '2026-07-15')",
+            file_get_contents(base_path('config/klaviyo.php')),
+        );
     }
 
     public function test_get_campaign_values_resolves_metric_id_then_aggregates(): void

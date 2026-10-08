@@ -11,9 +11,11 @@ return [
     // The newsletter list whose subscriber count powers the Subscribers tile.
     'list_id' => env('KLAVIYO_LIST_ID'),
 
-    // Pinned API revision. Klaviyo deprecates revisions on a ~yearly cycle —
-    // bump this value (and re-test) when notified, it's surfaced in the UI.
-    'revision' => env('KLAVIYO_REVISION', '2025-01-15'),
+    // Pinned API revision. Each is stable for a year, deprecated for a second,
+    // then retired. 2026-07-15 is the current GA revision; nothing between it
+    // and 2025-01-15 changed the values reports, list profiles, metrics or
+    // accounts endpoints this app calls. It is surfaced in the UI.
+    'revision' => env('KLAVIYO_REVISION', '2026-07-15'),
 
     // The conversion event used for Revenue/Conversions (WooCommerce → "Placed Order").
     'conversion_metric_name' => env('KLAVIYO_CONVERSION_METRIC', 'Placed Order'),

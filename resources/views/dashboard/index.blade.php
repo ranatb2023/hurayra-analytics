@@ -1576,8 +1576,8 @@
         // [key, label, icon, gradient, tooltip, revenue-subtext-key]
         $klaviyoTiles = [
             ['delivery_rate', 'Delivery Rate', $icons['check_circle'], 'from-emerald-400 to-teal-500', null, null],
-            ['open_rate', 'Open Rate', $icons['users'], 'from-sky-400 to-blue-500', 'Apple Mail Privacy Protection auto-opens messages, so open rate can read higher than reality.', null],
-            ['click_rate', 'Click Rate', $icons['arrow_path'], 'from-indigo-400 to-violet-500', null, null],
+            ['open_rate', 'Open Rate', $icons['users'], 'from-sky-400 to-blue-500', 'Inflated by Apple Mail privacy: Apple Mail Privacy Protection pre-loads messages, which Klaviyo records as opens, so open rate reads higher than real reading. Click rate is the more reliable engagement figure.', 'opens_unique'],
+            ['click_rate', 'Click Rate', $icons['arrow_path'], 'from-indigo-400 to-violet-500', 'Click rate = unique clicks ÷ delivered. Campaign click rates here are usually under 1%, so it is shown to two decimals.', 'clicks_unique'],
             ['revenue', 'Revenue', $icons['dollar'], 'from-emerald-400 to-teal-500', 'Total order revenue (Placed Order) attributed to campaigns.', null],
             ['conversions', 'Orders', $icons['check_badge'], 'from-fuchsia-400 to-purple-500', 'Orders (Placed Order) attributed to campaigns.', null],
             ['subscribers', 'New list subscribers', $icons['user_plus'], 'from-violet-400 to-fuchsia-500', 'Email sign-ups: new profiles that joined the Klaviyo newsletter list during the selected period (by list join date). Not subscription customers — see New Subscribers on the Subscribers page for those.', null],
@@ -1620,8 +1620,8 @@
     @php
         $klaviyoFlowTiles = [
             ['flow_delivery_rate', 'Delivery Rate', $icons['check_circle'], 'from-emerald-400 to-teal-500', null, null],
-            ['flow_open_rate', 'Open Rate', $icons['users'], 'from-sky-400 to-blue-500', 'Apple Mail Privacy Protection auto-opens messages, so open rate can read higher than reality.', null],
-            ['flow_click_rate', 'Click Rate', $icons['arrow_path'], 'from-indigo-400 to-violet-500', null, null],
+            ['flow_open_rate', 'Open Rate', $icons['users'], 'from-sky-400 to-blue-500', 'Inflated by Apple Mail privacy: Apple Mail Privacy Protection pre-loads messages, which Klaviyo records as opens, so open rate reads higher than real reading. Click rate is the more reliable engagement figure.', 'flow_opens_unique'],
+            ['flow_click_rate', 'Click Rate', $icons['arrow_path'], 'from-indigo-400 to-violet-500', 'Click rate = unique clicks ÷ delivered.', 'flow_clicks_unique'],
             ['flow_revenue', 'Revenue', $icons['dollar'], 'from-emerald-400 to-teal-500', 'Order revenue attributed to automated flows.', null],
             ['flow_conversions', 'Orders', $icons['check_badge'], 'from-fuchsia-400 to-purple-500', 'Orders attributed to automated flows.', null],
             ['flow_sub_created_conversions', 'Subscriptions from Flows', $icons['arrow_path'], 'from-indigo-400 to-violet-500', 'WC Subscription Created events attributed to automated flows (e.g. welcome series).', 'flow_sub_created_revenue'],

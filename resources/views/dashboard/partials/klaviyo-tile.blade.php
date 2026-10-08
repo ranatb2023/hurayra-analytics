@@ -17,7 +17,14 @@
     <dd class="mt-0.5 text-2xl font-bold tracking-tight text-slate-900"
         :class="(klaviyo.state === 'syncing' || klaviyo.state === 'loading') ? 'animate-pulse text-slate-300' : ''"
         x-text="klaviyoValue('{{ $k }}')"></dd>
-    @if ($sub)
+    @if ($sub && str_ends_with($sub, '_unique'))
+        {{-- The count behind the rate: "0 of 8,214 delivered" is a real zero,
+             "0 of 0" is no sends. --}}
+        <dd class="mt-0.5 text-xs text-slate-400" x-show="klaviyo.tiles && klaviyo.tiles['{{ $sub }}'] != null" x-cloak>
+            <span x-text="klaviyoValue('{{ $sub }}')"></span> of
+            <span x-text="klaviyoValue('{{ str_starts_with($sub, 'flow_') ? 'flow_delivered' : 'delivered' }}')"></span> delivered
+        </dd>
+    @elseif ($sub)
         <dd class="mt-0.5 text-xs font-medium text-emerald-600" x-show="klaviyo.tiles && klaviyo.tiles['{{ $sub }}'] != null" x-cloak>
             <span x-text="klaviyoValue('{{ $sub }}')"></span> revenue
         </dd>

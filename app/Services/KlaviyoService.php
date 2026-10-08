@@ -252,7 +252,9 @@ class KlaviyoService
             }
         }
 
-        $pct = fn (float $v) => round($v * 100, 1);
+        // Two decimals: campaign click rates here run well under 1%, and at
+        // one decimal 0.04% was stored and shown as 0.0%.
+        $pct = fn (float $v) => round($v * 100, 2);
 
         // Prefer recomputing from counts; else recipient-weighted rates; else 0.
         $deliveryRate = $sum['recipients'] > 0
@@ -273,6 +275,11 @@ class KlaviyoService
             'click_rate' => $clickRate,
             'revenue' => round($sum['conversion_value'], 2),
             'conversions' => (int) round($sum['conversions']),
+            // The counts behind the rates, so a 0% can be checked: zero
+            // clicks on a real send, or no sends at all.
+            'delivered' => (int) round($sum['delivered']),
+            'opens_unique' => (int) round($sum['opens_unique']),
+            'clicks_unique' => (int) round($sum['clicks_unique']),
         ];
     }
 
