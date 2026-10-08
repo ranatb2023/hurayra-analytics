@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Models\Import;
 use App\Models\Record;
+use App\Services\CsvImportService;
 use App\Services\MetricsService;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -113,5 +115,56 @@ class LabelsTest extends TestCase
 
         $this->assertStringContainsString("r.reliable ? '' : 'opacity-50'", $card);
         $this->assertStringContainsString('n too small', $card);
+    }
+
+    // ---- P2-5 ---------------------------------------------------------------
+
+    public function test_a_literal_null_from_the_export_is_imported_as_null(): void
+    {
+        $import = Import::create(['original_filename' => 'o.csv', 'status' => 'processing']);
+        $path = tempnam(sys_get_temp_dir(), 'csv');
+        file_put_contents($path, implode("\n", [
+            'id,record_type,status,date_created_gmt,total_amount,subscription_id,order_relationship,billing_email,utm_source,utm_medium,attribution_type',
+            '1,shop_subscription,wc-active,2026-09-01 10:00:00,0,NULL,subscription,NULL,(direct),NULL,typein',
+        ]));
+
+        (new CsvImportService)->import($import, $path);
+        unlink($path);
+
+        $row = Record::find(1);
+        $this->assertNull($row->utm_medium);
+        $this->assertNull($row->billing_email);
+        $this->assertSame('(direct)', $row->utm_source);
+    }
+
+    public function test_a_stored_null_string_renders_as_none(): void
+    {
+        // Rows imported before the fix still carry the text "NULL".
+        $this->sub(1, 'active', ['utm_medium' => 'NULL']);
+        $this->sub(2, 'active', ['utm_medium' => null]);
+
+        $rows = (new MetricsService)->segmentPerformance('utm_medium', 1)['rows'];
+
+        $this->assertSame(['(none)'], array_column($rows, 'segment'));
+        $this->assertSame(2, $rows[0]['subs']);
+
+        $trend = (new MetricsService)->trend('new_subscribers', 'month', null, 'utm_medium');
+        $this->assertSame(['(none)'], array_column($trend['series'], 'label'));
+    }
+
+    public function test_the_upsell_list_never_carries_null_text(): void
+    {
+        Record::create([
+            'id' => 10, 'import_id' => null, 'record_type' => 'shop_order', 'status' => 'completed',
+            'date_created_gmt' => '2026-05-01 10:00:00', 'total_amount' => 12, 'subscription_id' => null,
+            'order_relationship' => 'one_time', 'billing_email' => 'n@example.test',
+            'utm_source' => 'NULL', 'utm_medium' => 'NULL', 'attribution_type' => 'typein',
+        ]);
+        $this->sub(11, 'active', ['billing_email' => 'n@example.test', 'date_created_gmt' => '2026-06-01 10:00:00']);
+
+        $row = (new MetricsService)->oneTimeToSubscription()['customers'][0];
+
+        $this->assertSame('typein', $row['one_time_source']);
+        $this->assertNull($row['one_time_medium']);
     }
 }

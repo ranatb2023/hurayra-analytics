@@ -96,8 +96,11 @@ class MetricsService
      */
     private const TREND_SEGMENTS = 6;
 
-    /** Segment label for rows carrying nothing in the split column. */
-    private const UNATTRIBUTED = 'Not recorded';
+    /**
+     * Label for an attribution value that is not there: empty, NULL, or the
+     * literal string "NULL" a MySQL export writes for one.
+     */
+    public const NONE = '(none)';
 
     /**
      * Tenure buckets for {@see tenureAtChurn()}, as [label, inclusive upper
@@ -518,7 +521,7 @@ class MetricsService
         if ($breakdown !== null) {
             // Rows carrying nothing are a real segment -- usually the biggest
             // one -- so they are labelled rather than quietly dropped.
-            $query->selectRaw("COALESCE(NULLIF({$breakdown}, ''), ?) as segment", [self::UNATTRIBUTED])
+            $query->selectRaw("COALESCE(NULLIF(NULLIF({$breakdown}, ''), 'NULL'), ?) as segment", [self::NONE])
                 ->groupBy('segment');
         }
 
@@ -1265,7 +1268,7 @@ class MetricsService
         $groups = [];
 
         foreach ($perSub as $r) {
-            $label = $this->cleanAttribute($r->segment) ?? '(unattributed)';
+            $label = $this->cleanAttribute($r->segment) ?? self::NONE;
             $sub = $book[(int) $r->id] ?? null;
 
             $groups[$label] ??= self::EMPTY_SEGMENT;
@@ -2391,12 +2394,16 @@ class MetricsService
             ?? $this->cleanAttribute($order->attribution_type);
     }
 
-    /** An attribution column, with empty strings treated as absent. */
+    /**
+     * An attribution column, with empty strings -- and the literal "NULL" a
+     * MySQL export writes for a missing value -- treated as absent. Shown raw,
+     * it put "NULL · typein" on screen.
+     */
     private function cleanAttribute(mixed $value): ?string
     {
         $value = trim((string) ($value ?? ''));
 
-        return $value === '' ? null : $value;
+        return $value === '' || strcasecmp($value, 'null') === 0 ? null : $value;
     }
 
     private function monthDiff(string $from, string $to): int

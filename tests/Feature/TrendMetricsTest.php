@@ -158,10 +158,10 @@ class TrendMetricsTest extends TestCase
 
         $labels = array_column($this->metrics->trend('completed', 'month', null, 'utm_source')['series'], 'label');
 
-        $this->assertContains('Not recorded', $labels);
+        $this->assertContains('(none)', $labels);
         // Both the null and the empty string land in the one segment.
         $series = array_column($this->metrics->trend('completed', 'month', null, 'utm_source')['series'], 'values', 'label');
-        $this->assertSame([2], $series['Not recorded']);
+        $this->assertSame([2], $series['(none)']);
     }
 
     public function test_a_split_caps_the_lines_but_reports_what_it_left_out(): void

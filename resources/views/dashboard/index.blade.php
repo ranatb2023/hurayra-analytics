@@ -936,7 +936,7 @@
                                 x-text="r.days_away === 0 ? 'today' : `in ${r.days_away}d`"></td>
                             <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="r.payments_so_far"></td>
                             <td class="px-5 py-2.5 text-right font-semibold tabular-nums text-slate-900" x-text="money(r.amount)"></td>
-                            <td class="max-w-[160px] truncate px-5 py-2.5 text-xs text-slate-400" x-text="r.source || '—'"></td>
+                            <td class="max-w-[160px] truncate px-5 py-2.5 text-xs text-slate-400" x-text="sourceLabel(r.source)"></td>
                         </tr>
                     </template>
                 </tbody>
@@ -1215,7 +1215,7 @@
                             </td>
                             <td class="whitespace-nowrap px-3 py-2.5 text-slate-600" x-text="dateLabel(c.first_one_time_at)"></td>
                             <td class="max-w-[150px] px-3 py-2.5">
-                                <p class="truncate text-slate-600" x-text="c.one_time_source || '—'"></p>
+                                <p class="truncate text-slate-600" x-text="sourceLabel(c.one_time_source)"></p>
                                 <p class="truncate text-[11px] text-slate-400" x-show="upsellSourceDetail(c)"
                                    x-text="upsellSourceDetail(c)"></p>
                             </td>

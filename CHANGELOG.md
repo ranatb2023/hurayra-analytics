@@ -95,3 +95,7 @@ All notable changes to Hurayra Analytics. One entry per audit task
 
 ### P2-4: Small samples on the Overview acquisition card
 - The Overview "Where subscribers come from" card applies the same n < 30 rule as the Acquisition page. Small segments (fb at n = 13) are greyed out and marked "n too small".
+
+### P2-5: No raw `NULL` strings in the UI
+- The literal text `NULL` that MySQL writes into a CSV export is imported as an empty value, and rows already stored with it are treated as empty when displayed.
+- Every missing attribution value renders as **(none)** (it was variously "NULL", "(unattributed)" and "Not recorded"). "NULL · typein" no longer appears.

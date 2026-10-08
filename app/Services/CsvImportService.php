@@ -266,7 +266,7 @@ class CsvImportService
 
         foreach (self::ATTRIBUTION_COLUMNS as $csv => $column) {
             $value = isset($index[$csv]) ? trim((string) $get($csv)) : '';
-            $out[$column] = $value === '' ? null : mb_substr($value, 0, 191);
+            $out[$column] = $this->isBlank($value) ? null : mb_substr($value, 0, 191);
         }
 
         return $out;
@@ -363,14 +363,23 @@ class CsvImportService
     {
         $value = strtolower(trim((string) $value));
 
-        return $value === '' ? null : $value;
+        return $this->isBlank($value) ? null : $value;
     }
 
     private function normaliseEmail(mixed $value): ?string
     {
         $value = strtolower(trim((string) $value));
 
-        return $value === '' ? null : $value;
+        return $this->isBlank($value) ? null : $value;
+    }
+
+    /**
+     * Empty, or the literal "NULL" a MySQL client writes into a CSV for a
+     * missing value. Stored as text it showed up on screen as "NULL".
+     */
+    private function isBlank(string $value): bool
+    {
+        return $value === '' || strcasecmp($value, 'null') === 0;
     }
 
     /** Parse a datetime defensively; MySQL zero-dates and junk become null. */

@@ -293,9 +293,13 @@ export default (config = {}) => ({
         return `/api/metrics/audience/export?audience=${this.audience.key}`;
     },
 
-    /** An attribution value for display; blank means none was recorded. */
+    /**
+     * An attribution value for display. Blank, null or the literal "NULL" a
+     * MySQL export writes all mean none was recorded.
+     */
     sourceLabel(v) {
-        return v === null || v === undefined || v === '' ? '—' : String(v);
+        const s = v === null || v === undefined ? '' : String(v).trim();
+        return s === '' || s.toLowerCase() === 'null' ? '(none)' : s;
     },
 
     /** Currency, or an em dash when the figure has not been supplied. */
@@ -585,7 +589,7 @@ export default (config = {}) => ({
     upsellSourceDetail(c) {
         const source = (c.one_time_source ?? '').toLowerCase();
         const parts = [c.one_time_medium, c.one_time_campaign, c.one_time_attribution]
-            .filter((v) => v && v.toLowerCase() !== source);
+            .filter((v) => v && v.toLowerCase() !== 'null' && v.toLowerCase() !== source);
         return [...new Set(parts)].join(' · ');
     },
 

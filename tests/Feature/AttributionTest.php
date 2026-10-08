@@ -195,7 +195,7 @@ class AttributionTest extends TestCase
 
         $rows = $this->metrics->segmentPerformance('utm_source', 1)['rows'];
 
-        $this->assertSame('(unattributed)', $rows[0]['segment']);
+        $this->assertSame('(none)', $rows[0]['segment']);
         $this->assertSame(1, $rows[0]['subs']);
     }
 
