@@ -36,3 +36,9 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - New KPI **Churn · Adjusted** = (cancelled + expired + on-hold subscriptions that went dormant in the period) ÷ (active at start + new in period). Dormant = on hold with no successful payment for 1.5 billing cycles (45 days on a monthly plan); each is counted once, in the period it crosses that line.
 - **Revenue at Risk** = monthly value of every dormant on-hold subscription + failed/pending renewal orders in the period (was renewal orders only, so £0.00 whenever none failed). Baseline: September £930.18; October to 8 Oct £679.22.
 - Adjusted is shown next to Real on Overview and Retention.
+
+### P1-3: Churn uses actual end dates, not scheduled ones
+- A subscription counts as churned only when its status is cancelled/expired **and** its end date is on or before `now()` (capped at the data timestamp). This applies to the period cards, the drill-down list, tenure at churn and the monthly history.
+- Cancelled/expired subscriptions with a future end date now go into **Pending cancellation** (`scheduled_cancellations`), alongside WooCommerce's pending-cancel status.
+- The monthly history now runs to the data timestamp rather than stopping at the last order.
+- Note: the 5 subscriptions churned in October on the baseline data are real. Their status notes show pending-cancel → cancelled on 6 Oct, before the 8 Oct import, so they are still counted.

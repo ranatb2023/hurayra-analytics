@@ -113,9 +113,34 @@ class MetricsService
 
     private DataFreshness $freshness;
 
+    /** @var array{0:string, 1:string}|null [now, asOf] memo; see asOfGmt() */
+    private ?array $asOfMemo = null;
+
     public function __construct(?DataFreshness $freshness = null)
     {
         $this->freshness = $freshness ?? new DataFreshness;
+    }
+
+    /**
+     * {@see DataFreshness::asOf()} as a GMT string: the latest instant any
+     * churn can have happened by. An end date after it is a schedule, not a
+     * departure. Memoised for as long as the clock does not move.
+     */
+    private function asOfGmt(): string
+    {
+        $now = Clock::now()->toDateTimeString();
+
+        if ($this->asOfMemo === null || $this->asOfMemo[0] !== $now) {
+            $this->asOfMemo = [$now, Clock::gmt($this->freshness->asOf())];
+        }
+
+        return $this->asOfMemo[1];
+    }
+
+    /** The earlier of a GMT bound and {@see asOfGmt()}. */
+    private function capAtAsOf(string $gmt): string
+    {
+        return min($gmt, $this->asOfGmt());
     }
 
     /**
@@ -242,6 +267,8 @@ class MetricsService
             ->count();
         $churnBase = $activeAtStart + $newInPeriod;
         $churnedInPeriod = $this->churnedBetween($startS, $endS);
+        $pendingCancelStatus = $this->snapshotCount('pending-cancel', $endS);
+        $scheduledCancellations = $this->scheduledCancellations($endS);
 
         // Subscriptions that ended having never completed an order are a broken
         // checkout, not a lost customer: nothing was ever earned to lose. They
@@ -291,7 +318,11 @@ class MetricsService
             // ----- Subscriptions -----
             'new_subscribers' => $newInPeriod,
             'subscribers_active' => $active,
-            'pending_cancellation' => $this->snapshotCount('pending-cancel', $endS),
+            // Pending cancellation = WooCommerce's pending-cancel status, plus
+            // cancelled/expired rows whose end date has not happened yet.
+            'pending_cancellation' => $pendingCancelStatus + $scheduledCancellations,
+            'pending_cancellation_status' => $pendingCancelStatus,
+            'scheduled_cancellations' => $scheduledCancellations,
             'on_hold' => $this->snapshotCount('on-hold', $endS),
             'cancelled_without_purchase' => $cancelledWithout,
             'cancelled_with_purchase' => $cancelledWith,
@@ -757,8 +788,7 @@ class MetricsService
                 if ($sub['created'] >= $startS && $sub['created'] < $endS) {
                     $joined++;
                 }
-                if ($sub['terminal'] && $sub['ended'] !== null
-                    && $sub['ended'] >= $startS && $sub['ended'] < $endS) {
+                if ($this->endedBetween($sub, $startS, $endS)) {
                     $churned++;
                 }
             }
@@ -815,7 +845,26 @@ class MetricsService
             return $sub['held'] >= $instant;
         }
 
-        return $sub['terminal'] && $sub['ended'] !== null && $sub['ended'] >= $instant;
+        // Ended later than $instant: still a subscriber then -- but only for
+        // instants inside the data. Its status is terminal now, so at or past
+        // the data timestamp it is not active, whatever date it is scheduled
+        // to end on.
+        return $sub['terminal'] && $sub['ended'] !== null && $sub['ended'] >= $instant
+            && $instant < $this->asOfGmt();
+    }
+
+    /**
+     * Whether a subscription left in [start, end): a terminal status AND an
+     * end date that has actually happened. A cancellation scheduled for next
+     * month is not churn yet ({@see scheduledCancellations()}).
+     *
+     * @param  array{terminal:bool, ended:?string}  $sub
+     */
+    private function endedBetween(array $sub, string $start, string $end): bool
+    {
+        return $sub['terminal'] && $sub['ended'] !== null
+            && $sub['ended'] >= $start && $sub['ended'] < $end
+            && $sub['ended'] <= $this->asOfGmt();
     }
 
     /**
@@ -909,8 +958,7 @@ class MetricsService
                     $joined++;
                 }
 
-                $leftNow = $sub['terminal'] && $sub['ended'] !== null
-                    && $sub['ended'] >= $startS && $sub['ended'] < $endS;
+                $leftNow = $this->endedBetween($sub, $startS, $endS);
 
                 if ($leftNow) {
                     $churned++;
@@ -997,6 +1045,13 @@ class MetricsService
      */
     private function latestDataInstant(): CarbonImmutable
     {
+        // The import / sync time when there is one: a fortnight with no orders
+        // is still a fortnight of data -- cancellations and holds keep
+        // happening -- so the walk must not stop at the last order.
+        if ($this->freshness->dataTimestamp() !== null) {
+            return $this->freshness->asOf();
+        }
+
         $latest = (string) DB::table('records')->max('date_created_gmt');
 
         return $latest !== '' ? Clock::toLocal($latest) : Clock::now();
@@ -2130,13 +2185,19 @@ class MetricsService
     {
         if ($status === 'active') {
             $q->where('s.status', 'active')
-                ->orWhere(function (Builder $terminal) use ($instant) {
+                ->orWhereIn('s.id', $this->heldAfter($instant));
+
+            // Ended after $instant: still active then. Only inside the data --
+            // at the data timestamp a terminal status means not active, even
+            // when the end date is scheduled for later.
+            if ($instant < $this->asOfGmt()) {
+                $q->orWhere(function (Builder $terminal) use ($instant) {
                     // NULL end date => we cannot prove it was still live, so
                     // the comparison is NULL and the row drops out.
                     $terminal->whereIn('s.status', self::TERMINAL)
                         ->whereRaw($this->effectiveEndExpr().' >= ?', [$instant]);
-                })
-                ->orWhereIn('s.id', $this->heldAfter($instant));
+                });
+            }
 
             return;
         }
@@ -2303,6 +2364,8 @@ class MetricsService
      */
     private function failedSignupsBetween(string $start, string $end): int
     {
+        $end = $this->capAtAsOf($end);
+
         return $this->subscriptionLifecycle()
             ->whereIn('s.status', self::TERMINAL)
             ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
@@ -2667,9 +2730,35 @@ class MetricsService
         return $out;
     }
 
+    /**
+     * Cancelled or expired subscriptions whose end date has not happened yet,
+     * as of the data timestamp.
+     *
+     * WooCommerce can hold a future `_schedule_end` on a cancelled row. Read
+     * as an end date it put churn into a month before the month happened;
+     * these are pending cancellations instead. Only meaningful at the data
+     * timestamp: at any earlier instant such a subscription was simply still
+     * active ({@see wasActiveAt()}).
+     */
+    private function scheduledCancellations(string $instant): int
+    {
+        if ($instant < $this->asOfGmt()) {
+            return 0;
+        }
+
+        return $this->subscriptionLifecycle()
+            ->whereIn('s.status', self::TERMINAL)
+            ->whereRaw($this->effectiveEndExpr().' > ?', [$instant])
+            ->count();
+    }
+
     /** Subscribers who left during [start, end) — the numerator of churn. */
     private function churnedBetween(string $start, string $end): int
     {
+        // Only ends that have happened: a scheduled end date in the future is
+        // a pending cancellation, not churn.
+        $end = $this->capAtAsOf($end);
+
         return $this->subscriptionLifecycle()
             ->whereIn('s.status', self::TERMINAL)
             ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
@@ -2692,6 +2781,8 @@ class MetricsService
      */
     public function churnedSubscriptions(string $start, string $end, ?int $limit = null): array
     {
+        $end = $this->capAtAsOf($end);
+
         $orders = DB::table('records')
             ->where('record_type', 'shop_order')
             ->whereNotNull('subscription_id')
@@ -2937,6 +3028,8 @@ class MetricsService
      */
     public function tenureAtChurn(string $start, string $end): array
     {
+        $end = $this->capAtAsOf($end);
+
         $rows = $this->subscriptionLifecycle()
             ->whereNotNull('s.date_created_gmt')
             ->whereIn('s.status', self::TERMINAL)

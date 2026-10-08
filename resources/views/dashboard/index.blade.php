@@ -48,7 +48,7 @@
         'on_hold' => $M('On Hold', $icons['pause'], 2, 'bad', 'onHoldNote()',
             'A live state with no history in the source data, so it is read as-is at the period end.'),
         'pending_cancellation' => $M('Pending Cancellation', $icons['clock'], 2, 'bad', "'as of the period end'",
-            'Cancellation requested but not yet effective. These have not churned yet.'),
+            'Pending cancellation = subscriptions in WooCommerce\'s pending-cancel status + cancelled/expired subscriptions whose end date is still in the future. Neither has churned yet.'),
         'failed_signups' => $M('Failed Sign-ups', $icons['exclaim'], 2, 'bad', "'never ordered'",
             'A subset of Subscribers Lost: subscriptions that ended having never completed an order. A checkout defect, not churn — they cost no revenue. Churn · Real excludes them.'),
     ];
