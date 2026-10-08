@@ -48,3 +48,8 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - Acquisition no longer drops small segments. They are folded into an **Other** row, and the table has an "All subscriptions" total.
 - Cohort value adds an **Earlier** row for cohorts older than the 12 shown.
 - Baseline: Overview 243, Acquisition 243, Cohorts 243 (were 243, 239 and 241).
+
+### P1-5: ARPU label and calculation
+- ARPU is **per paying subscriber**: MRR ÷ subscribers who are active and have been billed at least once. The card shows the count ("235 paying of 243 active").
+- ARPU is carried at 4 decimal places (displayed in pennies), so ARPU × paying subscribers = MRR to the penny. Baseline: £18.5529 × 235 = £4,359.93.
+- MRR is built from the same subscribers as the Active card (`isActive()`), not the live status column.

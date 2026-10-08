@@ -382,6 +382,7 @@ class MetricsService
             'mrr' => $recurring['mrr'],
             'arr' => $recurring['arr'],
             'arpu' => $recurring['arpu'],
+            'paying_subscribers' => $recurring['paying'],
             'net_revenue_retention' => $revenue['nrr'],
             'gross_revenue_retention' => $revenue['grr'],
             'recurring_revenue_start' => $revenue['start'],
@@ -1158,7 +1159,7 @@ class MetricsService
                 'arr' => round($mrr * 12, 2),
                 // MRR is paying subscribers times what each of them pays.
                 // Carrying both says which of the two actually moved.
-                'arpu' => $paying > 0 ? round($mrr / $paying, 2) : null,
+                'arpu' => $paying > 0 ? round($mrr / $paying, 4) : null,
                 'paying' => $paying,
                 'partial' => $latest->lt($monthEnd),
             ];
@@ -2686,41 +2687,50 @@ class MetricsService
      * Gross, like every other money figure here: it includes VAT and shipping,
      * because that is what `total_amount` carries.
      *
-     * @return array{mrr:float, arr:float, arpu:?float}
+     * @return array{mrr:float, arr:float, arpu:?float, paying:int}
      */
     private function recurringRevenue(string $end): array
     {
-        $subs = DB::table('records')
-            ->where('record_type', 'shop_subscription')
-            ->where('status', 'active')
-            ->where('date_created_gmt', '<', $end)
-            ->select('id', 'billing_period', 'billing_interval')
-            ->get();
+        // The same subscribers the Active card counts ({@see isActive()}),
+        // not the live status column -- otherwise MRR and the active count
+        // describe two different books.
+        $subs = array_filter(
+            $this->lifecycleSubs(['billing_period', 'billing_interval']),
+            fn (array $sub) => $this->isActive($sub, $end),
+        );
 
-        if ($subs->isEmpty()) {
-            return ['mrr' => 0.0, 'arr' => 0.0, 'arpu' => null];
+        if ($subs === []) {
+            return ['mrr' => 0.0, 'arr' => 0.0, 'arpu' => null, 'paying' => 0];
         }
 
-        $price = $this->lastPaymentBefore($subs->pluck('id')->all(), $end);
+        $price = $this->lastPaymentBefore(array_keys($subs), $end);
 
         $mrr = 0.0;
         $paying = 0;
 
-        foreach ($subs as $sub) {
-            $amount = (float) ($price[(int) $sub->id] ?? 0.0);
+        foreach ($subs as $id => $sub) {
+            $amount = (float) ($price[$id] ?? 0.0);
 
             if ($amount <= 0.0) {
                 continue; // never billed, so nothing recurring yet
             }
 
             $paying++;
-            $mrr += $amount * (30 / $this->cycleDays($sub->billing_period, $sub->billing_interval === null ? null : (int) $sub->billing_interval));
+            $mrr += $amount * (30 / $this->cycleDays(
+                $sub['billing_period'] === null ? null : (string) $sub['billing_period'],
+                $sub['billing_interval'] === null ? null : (int) $sub['billing_interval'],
+            ));
         }
 
         return [
             'mrr' => round($mrr, 2),
             'arr' => round($mrr * 12, 2),
-            'arpu' => $paying > 0 ? round($mrr / $paying, 2) : null,
+            // Per PAYING subscriber: active subscriptions that have never been
+            // billed have no price, and dividing by them understated ARPU
+            // without saying so. Carried at 4 dp (the UI shows pennies) so
+            // ARPU × paying = MRR to the penny, not to within 68p.
+            'arpu' => $paying > 0 ? round($mrr / $paying, 4) : null,
+            'paying' => $paying,
         ];
     }
 

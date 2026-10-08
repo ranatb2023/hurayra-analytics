@@ -316,6 +316,13 @@ export default (config = {}) => ({
         return `${d} dormant 1.5 cycles+ — stopped paying, in Churn · Adjusted`;
     },
 
+    /** ARPU's own denominator, so ARPU × it visibly equals MRR. */
+    arpuNote() {
+        const m = this.metrics ?? {};
+        if (m.paying_subscribers === undefined) return '';
+        return `${this.value('paying_subscribers')} paying of ${this.value('subscribers_active')} active, per month`;
+    },
+
     /** What the Revenue at Risk figure is made of. */
     revenueAtRiskNote() {
         const m = this.metrics ?? {};
