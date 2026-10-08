@@ -61,3 +61,8 @@ All notable changes to Hurayra Analytics. One entry per audit task
 ### P1-7: Cohort median tenure
 - Tenure = (end date, or now if still running) − start date, for every subscription in the cohort; the median is over all of them. Only the leavers were counted before.
 - Baseline: the Aug 26 cohort (56% still active) goes from a median of 5 days to 41.
+
+### P1-8: Cohort retention is survival
+- Cohort retention at M(n) = % of the cohort not cancelled or expired at the end of month n. On hold is not leaving. The curve can only stay flat or fall. The month in progress is measured at the data timestamp and shown in italics; months that have not happened are blank.
+- The old "% with a completed order in month n" grid is kept behind an **Order activity** toggle. It shows billing rhythm, not retention: two-monthly and six-weekly plans skip months.
+- Baseline: no cohort's curve rises. The February 2026 cohort reads M3 25.0% → M4 21.9% (activity: 17.7% → 20.8%).

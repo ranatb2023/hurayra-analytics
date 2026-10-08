@@ -1854,70 +1854,140 @@ class MetricsService
     }
 
     /**
-     * Cohort retention: of the subscriptions that signed up in month M, how many
-     * had a completed order (parent or renewal) in month M+k, for k = 0..maxOffset.
+     * Cohort retention as survival: of the subscriptions that signed up in
+     * month M, the share that had not ended (cancelled / expired) by the end
+     * of month M+n, for n = 0..maxOffset.
      *
-     * @return array{offsets:int[], rows:array<int,array{cohort:string,size:int,cells:array<int,array{count:int,pct:float}>}>}
+     * It used to be "had a completed order in month M+n". About a quarter of
+     * this book renews every six weeks or two months, so a perfectly loyal
+     * subscriber skips whole months: the curve went UP over time (Feb cohort
+     * M4 20.8% > M3 17.7%), which retention cannot do. Survival can only stay
+     * flat or fall. The old grid is still returned as `activity` and shown as
+     * the "Order activity" view.
+     *
+     * A month that has not finished is measured at the data timestamp and
+     * flagged `partial`; a month that has not started is null.
+     *
+     * @return array{offsets:int[], rows:array<int,array{cohort:string,size:int,cells:array<int,?array{count:int,pct:float,partial:bool}>,activity:array<int,array{count:int,pct:float}>}>}
      */
     public function cohortRetention(int $maxOffset = 6, int $maxCohorts = 12): array
     {
-        $subs = $this->subscriptions()
-            ->whereNotNull('date_created_gmt')
-            ->select('id', 'date_created_gmt')
-            ->get();
+        $asOf = $this->asOfGmt();
+        $book = $this->lifecycleSubs();
 
-        $cohortOf = [];   // sub id => 'Y-m'
-        $cohortSize = []; // 'Y-m' => count
-        foreach ($subs as $s) {
-            $month = Clock::monthKey((string) $s->date_created_gmt);
-            $cohortOf[$s->id] = $month;
-            $cohortSize[$month] = ($cohortSize[$month] ?? 0) + 1;
+        $members = []; // 'Y-m' => [sub, ...]
+        foreach ($book as $sub) {
+            $members[Clock::monthKey($sub['created'])][] = $sub;
         }
 
-        $orders = DB::table('records')
+        krsort($members); // most recent first
+        $cohorts = array_slice(array_keys($members), 0, $maxCohorts);
+        sort($cohorts);   // display oldest -> newest
+
+        $activity = $this->cohortOrderActivity($book, $cohorts, $maxOffset);
+
+        $rows = [];
+        foreach ($cohorts as $cohort) {
+            $size = count($members[$cohort]);
+            $opens = CarbonImmutable::parse($cohort.'-01 00:00:00', Clock::tz());
+            $cells = [];
+
+            for ($k = 0; $k <= $maxOffset; $k++) {
+                $monthStart = Clock::gmt($opens->addMonths($k));
+                $monthEnd = Clock::gmt($opens->addMonths($k + 1));
+
+                if ($monthStart > $asOf) {
+                    $cells[$k] = null; // not happened yet
+                    continue;
+                }
+
+                $partial = $monthEnd > $asOf;
+                $at = $partial ? $asOf : $monthEnd;
+
+                $alive = count(array_filter($members[$cohort], fn (array $sub) => ! $this->hasEndedBy($sub, $at)));
+
+                $cells[$k] = [
+                    'count' => $alive,
+                    'pct' => $size > 0 ? round($alive / $size * 100, 1) : 0.0,
+                    'partial' => $partial,
+                ];
+            }
+
+            $rows[] = [
+                'cohort' => $cohort,
+                'size' => $size,
+                'cells' => $cells,
+                'activity' => $activity[$cohort],
+            ];
+        }
+
+        return ['offsets' => range(0, $maxOffset), 'rows' => $rows];
+    }
+
+    /**
+     * Whether a subscription had left (cancelled / expired, end date on or
+     * before $instant) by $instant. Pausing is not leaving. A terminal row with
+     * no end date at all is treated as gone: it cannot be shown to be alive.
+     *
+     * @param  array{terminal:bool, ended:?string}  $sub
+     */
+    private function hasEndedBy(array $sub, string $instant): bool
+    {
+        return $sub['terminal'] && ($sub['ended'] === null || $sub['ended'] <= $instant);
+    }
+
+    /**
+     * The old cohort grid, kept as the "Order activity" view: of a cohort, the
+     * share with a completed order in month M+k. Useful for seeing billing
+     * rhythm -- not retention, because a six-weekly plan skips months.
+     *
+     * @param  array<int, array<string, mixed>>  $book
+     * @param  array<int, string>  $cohorts
+     * @return array<string, array<int, array{count:int, pct:float}>>
+     */
+    private function cohortOrderActivity(array $book, array $cohorts, int $maxOffset): array
+    {
+        $cohortOf = [];
+        $size = [];
+        foreach ($book as $id => $sub) {
+            $cohortOf[$id] = Clock::monthKey($sub['created']);
+            $size[$cohortOf[$id]] = ($size[$cohortOf[$id]] ?? 0) + 1;
+        }
+
+        $counts = []; // 'Y-m' => [offset => distinct subs]
+        $seen = [];
+        foreach (DB::table('records')
             ->where('record_type', 'shop_order')
             ->where('status', 'completed')
             ->whereNotNull('subscription_id')
             ->whereNotNull('date_created_gmt')
             ->select('subscription_id', 'date_created_gmt')
-            ->get();
-
-        $counts = []; // 'Y-m' => [offset => count of distinct subs]
-        $seen = [];   // dedupe one sub per (cohort, offset)
-        foreach ($orders as $o) {
-            $sid = $o->subscription_id;
+            ->get() as $o) {
+            $sid = (int) $o->subscription_id;
             if (! isset($cohortOf[$sid])) {
                 continue;
             }
             $cohort = $cohortOf[$sid];
             $offset = $this->monthDiff($cohort, Clock::monthKey((string) $o->date_created_gmt));
-            if ($offset < 0 || $offset > $maxOffset) {
+            if ($offset < 0 || $offset > $maxOffset || isset($seen["{$cohort}|{$offset}|{$sid}"])) {
                 continue;
             }
-            $key = "{$cohort}|{$offset}|{$sid}";
-            if (isset($seen[$key])) {
-                continue;
-            }
-            $seen[$key] = true;
+            $seen["{$cohort}|{$offset}|{$sid}"] = true;
             $counts[$cohort][$offset] = ($counts[$cohort][$offset] ?? 0) + 1;
         }
 
-        krsort($cohortSize); // most recent first
-        $cohorts = array_slice(array_keys($cohortSize), 0, $maxCohorts);
-        sort($cohorts);      // display oldest -> newest
-
-        $rows = [];
+        $out = [];
         foreach ($cohorts as $cohort) {
-            $size = $cohortSize[$cohort];
-            $cells = [];
             for ($k = 0; $k <= $maxOffset; $k++) {
                 $count = $counts[$cohort][$k] ?? 0;
-                $cells[$k] = ['count' => $count, 'pct' => $size > 0 ? round($count / $size * 100, 1) : 0.0];
+                $out[$cohort][$k] = [
+                    'count' => $count,
+                    'pct' => ($size[$cohort] ?? 0) > 0 ? round($count / $size[$cohort] * 100, 1) : 0.0,
+                ];
             }
-            $rows[] = ['cohort' => $cohort, 'size' => $size, 'cells' => $cells];
         }
 
-        return ['offsets' => range(0, $maxOffset), 'rows' => $rows];
+        return $out;
     }
 
     /**

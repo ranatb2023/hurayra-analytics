@@ -51,6 +51,8 @@ export default (config = {}) => ({
     // Shaped, not null: x-show hides a section but still evaluates the
     // x-for inside it, so a null here throws on every first paint.
     cohorts: { offsets: [], rows: [] },
+    // Survival (retention) or order activity, for the cohort grid.
+    cohortMode: 'survival',
     // Lifetime value by sign-up month (period-independent).
     cohortValue: { rows: [] },
     // Acquisition-segment performance; dimension is user-switchable.
@@ -1321,6 +1323,11 @@ export default (config = {}) => ({
         if (['revenue', 'sub_created_revenue', 'sub_renewal_revenue', 'flow_revenue', 'flow_sub_created_revenue', 'flow_sub_renewal_revenue'].includes(key)) return this.money(v);
         if (['delivery_rate', 'open_rate', 'click_rate', 'flow_delivery_rate', 'flow_open_rate', 'flow_click_rate'].includes(key)) return `${v}%`;
         return new Intl.NumberFormat().format(v);
+    },
+
+    /** The cells for the cohort grid's current view; null = not happened yet. */
+    cohortCells(row) {
+        return (this.cohortMode === 'activity' ? row.activity : row.cells) ?? [];
     },
 
     // --- cohort heatmap cell styling ---

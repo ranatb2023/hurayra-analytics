@@ -120,11 +120,11 @@ class RetentionCustomerCohortTest extends TestCase
         $row = collect($cohort['rows'])->firstWhere('cohort', '2025-01');
 
         $this->assertSame(2, $row['size']);
-        $this->assertSame(2, $row['cells'][0]['count']);   // both active month 0
-        $this->assertSame(100.0, $row['cells'][0]['pct']);
-        $this->assertSame(1, $row['cells'][1]['count']);   // only sub 1 in month 1
-        $this->assertSame(50.0, $row['cells'][1]['pct']);
-        $this->assertSame(1, $row['cells'][2]['count']);   // only sub 1 in month 2
-        $this->assertSame(0, $row['cells'][3]['count']);
+        $this->assertSame(2, $row['activity'][0]['count']);   // both active month 0
+        $this->assertSame(100.0, $row['activity'][0]['pct']);
+        $this->assertSame(1, $row['activity'][1]['count']);   // only sub 1 in month 1
+        $this->assertSame(50.0, $row['activity'][1]['pct']);
+        $this->assertSame(1, $row['activity'][2]['count']);   // only sub 1 in month 2
+        $this->assertSame(0, $row['activity'][3]['count']);
     }
 }

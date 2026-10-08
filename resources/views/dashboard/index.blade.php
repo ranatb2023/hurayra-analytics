@@ -1420,10 +1420,26 @@
     {{-- ============ Cohort retention ============ --}}
     <div class="mt-8 print-block rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm"
          x-show="cohorts.rows.length" x-cloak>
-        <div class="flex items-baseline justify-between">
+        <div class="flex flex-wrap items-baseline justify-between gap-3">
             <div>
-                <h2 class="text-base font-bold tracking-tight text-slate-900">Cohort Retention</h2>
-                <p class="mt-0.5 text-xs text-slate-500">Of subscribers who signed up each month, the % with a completed order N months later.</p>
+                <h2 class="text-base font-bold tracking-tight text-slate-900"
+                    x-text="cohortMode === 'survival' ? 'Cohort Retention' : 'Cohort Order Activity'"></h2>
+                <p class="mt-0.5 text-xs text-slate-500" x-show="cohortMode === 'survival'">
+                    Of subscribers who signed up each month, the % not yet cancelled or expired at the end of month N.
+                    A subscriber on hold has not left, so the curve can only stay flat or fall.
+                </p>
+                <p class="mt-0.5 text-xs text-slate-500" x-show="cohortMode === 'activity'" x-cloak>
+                    Of subscribers who signed up each month, the % with a completed order in month N. Not retention:
+                    six-weekly and two-monthly plans skip whole months, so this shows billing rhythm.
+                </p>
+            </div>
+            <div class="no-print flex overflow-hidden rounded-lg border border-slate-200">
+                <template x-for="opt in [{ value: 'survival', label: 'Retention' }, { value: 'activity', label: 'Order activity' }]" :key="opt.value">
+                    <button type="button" @click="cohortMode = opt.value"
+                            class="px-2.5 py-1.5 text-xs font-medium transition"
+                            :class="cohortMode === opt.value ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'"
+                            x-text="opt.label"></button>
+                </template>
             </div>
         </div>
         <div class="mt-4 overflow-x-auto">
@@ -1442,16 +1458,21 @@
                         <tr>
                             <td class="whitespace-nowrap px-2 py-1 text-left font-semibold text-slate-700" x-text="cohortMonthLabel(row.cohort)"></td>
                             <td class="px-2 py-1 font-medium text-slate-500" x-text="row.size"></td>
-                            <template x-for="(cell, idx) in row.cells" :key="idx">
-                                <td class="rounded-md px-2 py-1.5 font-semibold tabular-nums" :style="cohortStyle(cell.pct)"
-                                    x-text="cell.pct > 0 ? cell.pct + '%' : '·'"></td>
+                            <template x-for="(cell, idx) in cohortCells(row)" :key="idx">
+                                <td class="rounded-md px-2 py-1.5 font-semibold tabular-nums"
+                                    :style="cell ? cohortStyle(cell.pct) : ''"
+                                    :class="cell && cell.partial ? 'italic opacity-75' : ''"
+                                    :title="cell && cell.partial ? 'Month in progress: measured at the data timestamp' : ''"
+                                    x-text="cell && cell.pct > 0 ? cell.pct + '%' : '·'"></td>
                             </template>
                         </tr>
                     </template>
                 </tbody>
             </table>
         </div>
-        <p class="mt-3 text-xs text-slate-400">M0 = sign-up month. Darker = higher retention.</p>
+        <p class="mt-3 text-xs text-slate-400">
+            M0 = sign-up month. Darker = higher. <span x-show="cohortMode === 'survival'">Italic = month still in progress.</span>
+        </p>
     </div>
 </div>
     </div>
