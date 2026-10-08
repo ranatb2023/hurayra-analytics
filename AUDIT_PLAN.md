@@ -25,7 +25,7 @@ All bucketing and "today" maths moves to Europe/London through one helper.
 
 | Task | Files | What changed |
 |---|---|---|
-| P0-1 Real "today" | new `app/Support/Clock.php`, new `app/Services/DataFreshness.php`, `MetricsService` (`upcomingRenewals`, snapshot capping), `MetricsController::summary`, `dashboard.js` (`periodEndNote`) | |
+| P0-1 Real "today" | new `app/Support/Clock.php`, new `app/Services/DataFreshness.php`, `MetricsService` (`upcomingRenewals`, snapshot capping), `MetricsController::summary`, `dashboard.js` (`periodEndNote`) | Added `Clock` (Europe/London `now()`, GMT↔local helpers) and `DataFreshness::asOf()` (now, capped at the last import/sync). `compute()` caps a period that runs past the data at `asOf` and returns `snapshot_at`/`snapshot_capped`; the "as of" label reads it. `upcomingRenewals()` measures from `Clock::now()` in UK calendar days. Tests: `RealTodayTest`; base `TestCase` freezes time. |
 | P0-2 Europe/London bucketing | `Clock`, `Period`, `PeriodResolver`, `MetricsService` (`compute`, `bucketExpression`, month walks, cohorts), `MetricsController`, `config/app.php` | |
 | P0-3 Freshness banner | `DataFreshness`, `AppServiceProvider` (view composer), `layouts/app.blade.php`, new `partials/freshness.blade.php`, `dashboard.js` | |
 | P0-4 No-orders alert | new `config/alerts.php`, new migration `alert_incidents`, new `app/Services/NoOrdersAlert.php`, new command `alerts:no-orders`, `routes/console.php`, `.env.example` | |

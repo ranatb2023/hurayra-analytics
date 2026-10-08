@@ -764,16 +764,28 @@ export default (config = {}) => ({
 
     /**
      * The instant the snapshot cards are measured at, as a date a person reads.
-     * `period.end` is exclusive, so April's is stored as 1 May and shown as
-     * 30 Apr — the last day actually inside the period.
+     *
+     * Read from the server's `snapshot_at`, never the period end: a period
+     * still in progress is measured at the data's own timestamp, so October
+     * reads "as of 08 Oct", not "as of 31 Oct". When the period is complete,
+     * `snapshot_at` is its exclusive end (1 May for April), shown as the last
+     * day actually inside it.
      */
     periodEndNote() {
-        const end = this.period?.end;
-        if (!end) return '';
-        const [y, m, d] = String(end).split(' ')[0].split('-');
+        const at = this.metrics?.snapshot_at;
+        if (!at) return '';
+        const [date, time = '00:00:00'] = String(at).split(' ');
+        const [y, m, d] = date.split('-');
         if (!y || !m || !d) return '';
-        const last = new Date(+y, +m - 1, +d - 1);
-        return `as of ${last.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}`;
+        const [hh, mm] = time.split(':');
+        const fmt = { day: '2-digit', month: 'short', year: 'numeric' };
+
+        if (this.metrics.snapshot_capped) {
+            const when = new Date(+y, +m - 1, +d, +hh, +mm);
+            return `as of ${when.toLocaleDateString(undefined, fmt)}, ${String(hh).padStart(2, '0')}:${mm}`;
+        }
+
+        return `as of ${new Date(+y, +m - 1, +d - 1).toLocaleDateString(undefined, fmt)}`;
     },
 
     // --- sparklines (inline SVG path from a values array) ---

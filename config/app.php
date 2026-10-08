@@ -69,6 +69,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Business Timezone
+    |--------------------------------------------------------------------------
+    |
+    | The database holds GMT (WooCommerce's *_gmt columns), so the app runs in
+    | UTC. Days, weeks, months and "today" are the store's, though: every
+    | bucket and relative date is converted to this zone first. See
+    | App\Support\Clock.
+    |
+    */
+
+    'business_timezone' => env('APP_BUSINESS_TIMEZONE', 'Europe/London'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Locale Configuration
     |--------------------------------------------------------------------------
     |

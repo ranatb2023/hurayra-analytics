@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Record;
+use App\Support\Clock;
 use App\Support\Period;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
@@ -110,6 +111,13 @@ class MetricsService
         ['181+ days', null],
     ];
 
+    private DataFreshness $freshness;
+
+    public function __construct(?DataFreshness $freshness = null)
+    {
+        $this->freshness = $freshness ?? new DataFreshness;
+    }
+
     /**
      * Full dashboard payload: every metric, supporting totals, the not-completed
      * breakdown, and (optionally) the compare-to-previous deltas.
@@ -142,8 +150,23 @@ class MetricsService
      */
     public function compute(CarbonImmutable $start, CarbonImmutable $end, bool $strictNotCompleted = false): array
     {
-        $startS = $start->toDateTimeString();
-        $endS = $end->toDateTimeString();
+        // A period that runs past the data is measured up to the data, not
+        // beyond it: a subscription's status after the last import is unknown,
+        // and treating the export as still true on the 31st labels the book
+        // with a date that has not happened.
+        $asOf = $this->freshness->asOf();
+        $capped = $end->gt($asOf);
+
+        if ($capped) {
+            $end = $asOf;
+        }
+
+        if ($start->gt($end)) {
+            $start = $end;
+        }
+
+        $startS = Clock::gmt($start);
+        $endS = Clock::gmt($end);
 
         // ---- Subscription snapshot counts (status as of period end) ----
         $active = $this->snapshotCount('active', $endS);
@@ -237,6 +260,11 @@ class MetricsService
         $customerChurn = $this->customerChurn($startS, $endS);
 
         return [
+            // The instant every snapshot figure below is measured at, for the
+            // "as of" label. Capped at the data, so it is never in the future.
+            'snapshot_at' => Clock::toLocal($endS)->toDateTimeString(),
+            'snapshot_capped' => $capped,
+
             // ----- Subscriptions -----
             'new_subscribers' => $this->subscriptions()
                 ->where('date_created_gmt', '>=', $startS)
@@ -1474,7 +1502,10 @@ class MetricsService
      */
     public function upcomingRenewals(int $days = 14, ?int $limit = 200): array
     {
-        $now = CarbonImmutable::parse((string) DB::table('records')->max('date_created_gmt'));
+        // The real date, not the newest row: measured from the data, a week-old
+        // export put every renewal a week further out than WooCommerce does.
+        $now = Clock::now();
+        $today = $now->startOfDay();
 
         $paid = DB::table('records')
             ->where('record_type', 'shop_order')
@@ -1488,8 +1519,8 @@ class MetricsService
             ->where('s.record_type', 'shop_subscription')
             ->whereNotIn('s.status', self::TERMINAL)
             ->whereNotNull('s.next_payment_at')
-            ->where('s.next_payment_at', '>=', $now->toDateTimeString())
-            ->where('s.next_payment_at', '<', $now->addDays(max(1, $days))->toDateTimeString())
+            ->where('s.next_payment_at', '>=', Clock::gmt($now))
+            ->where('s.next_payment_at', '<', Clock::gmt($now->addDays(max(1, $days))))
             ->selectRaw('s.id, s.billing_email, s.customer_id, s.status, s.next_payment_at')
             ->selectRaw('s.utm_source, s.billing_period, s.billing_interval')
             ->selectRaw('COALESCE(p.payments, 0) as payments, COALESCE(p.amount, 0) as amount')
@@ -1506,7 +1537,9 @@ class MetricsService
                 'customer' => $r->billing_email ?: ($r->customer_id > 0 ? 'Customer #'.$r->customer_id : null),
                 'status' => (string) $r->status,
                 'due_at' => (string) $r->next_payment_at,
-                'days_away' => (int) max(0, floor($now->diffInDays(CarbonImmutable::parse((string) $r->next_payment_at)))),
+                // Calendar days in UK time, the way WooCommerce's Next Payment
+                // column reads: due at 09:00 tomorrow is "in 1d", not "today".
+                'days_away' => (int) max(0, $today->diffInDays(Clock::toLocal((string) $r->next_payment_at)->startOfDay())),
                 'payments_so_far' => $payments,
                 'amount' => round((float) $r->amount, 2),
                 'source' => $r->utm_source,

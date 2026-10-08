@@ -222,12 +222,7 @@ class AttributionTest extends TestCase
 
     public function test_upcoming_renewals_flags_the_first_renewal(): void
     {
-        // Anchors "now" at 1 June.
-        Record::create([
-            'id' => 900, 'import_id' => null, 'record_type' => 'shop_order', 'status' => 'completed',
-            'date_created_gmt' => '2026-06-01 00:00:00', 'total_amount' => 5, 'subscription_id' => null,
-            'customer_id' => 0, 'order_relationship' => 'one_time', 'billing_email' => null, 'ended_at' => null,
-        ]);
+        $this->travelTo(CarbonImmutable::parse('2026-06-01 00:00:00', 'UTC'));
 
         $this->sub(1, 'active', '2026-05-01 00:00:00', ['next_payment_at' => '2026-06-05 00:00:00', 'billing_email' => 'first@example.com']);
         $this->order(100, 1, '2026-05-01 00:00:00', 20.0); // one payment so far
@@ -246,11 +241,7 @@ class AttributionTest extends TestCase
 
     public function test_cancelled_subscriptions_never_appear_in_the_pipeline(): void
     {
-        Record::create([
-            'id' => 900, 'import_id' => null, 'record_type' => 'shop_order', 'status' => 'completed',
-            'date_created_gmt' => '2026-06-01 00:00:00', 'total_amount' => 5, 'subscription_id' => null,
-            'customer_id' => 0, 'order_relationship' => 'one_time', 'billing_email' => null, 'ended_at' => null,
-        ]);
+        $this->travelTo(CarbonImmutable::parse('2026-06-01 00:00:00', 'UTC'));
 
         // A stale schedule left on a dead subscription must not be dunned.
         $this->sub(1, 'cancelled', '2026-01-01 00:00:00', [
