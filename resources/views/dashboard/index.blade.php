@@ -1035,8 +1035,8 @@
                     <span class="font-medium text-slate-400">· all time</span>
                 </h3>
                 <p class="mt-1 text-xs text-slate-500">
-                    Matched on billing email (falling back to customer ID). Shows the first one-time order date and the
-                    sign-up date of the subscription they took out afterwards.
+                    Matched on billing email (falling back to customer ID). A one-time purchase is a completed order over
+                    £0; a conversion is a subscription started at least one day after the first one. Shows both dates.
                 </p>
             </div>
             <div class="no-print flex shrink-0 items-center gap-2">
@@ -1061,7 +1061,7 @@
             @php
                 $upsellStats = [
                     ['Converted customers', "new Intl.NumberFormat().format(upsell.summary.converted || 0)", 'of <span x-text="new Intl.NumberFormat().format(upsell.summary.one_time_customers || 0)"></span> one-time buyers'],
-                    ['Conversion rate', "upsell.summary.conversion_rate === null || upsell.summary.conversion_rate === undefined ? '—' : upsell.summary.conversion_rate + '%'", 'one-time buyers who later subscribed'],
+                    ['Conversion rate', "upsell.summary.conversion_rate === null || upsell.summary.conversion_rate === undefined ? '—' : upsell.summary.conversion_rate + '%'", 'converted ÷ customers with a paid one-time order'],
                     ['Avg time to convert', "daysLabel(upsell.summary.avg_days_to_convert)", 'first one-time order → sign-up'],
                     ['Subscription revenue', "money(upsell.summary.subscription_revenue || 0)", 'completed subscription orders, lifetime'],
                 ];
@@ -1091,9 +1091,9 @@
                 </span>
             </label>
             <label class="inline-flex cursor-pointer items-center gap-2.5 text-sm font-medium text-slate-600">
-                <span>Completed one-time orders only</span>
+                <span title="Off: a subscription started the same UK day as the one-off order is not counted as a conversion (they usually checked out together).">Include same-day sign-ups</span>
                 <span class="relative">
-                    <input type="checkbox" x-model="upsellCompletedOnly" @change="fetchUpsell()" class="peer sr-only">
+                    <input type="checkbox" x-model="upsellIncludeSameDay" @change="fetchUpsell()" class="peer sr-only">
                     <span class="block h-5 w-9 rounded-full bg-slate-300 transition peer-checked:bg-emerald-500"></span>
                     <span class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition peer-checked:translate-x-4"></span>
                 </span>
@@ -1127,7 +1127,7 @@
                                         <p class="text-[11px] text-slate-400">
                                             <span x-show="c.customer_id">ID <span x-text="c.customer_id"></span> · </span>
                                             <span>sub #<span x-text="c.subscription_id"></span></span>
-                                            <span x-show="!c.is_conversion" class="ml-1 font-semibold text-amber-600">subscribed first</span>
+                                            <span x-show="!c.is_conversion" class="ml-1 font-semibold text-amber-600">subscribed first or same day</span>
                                         </p>
                                     </div>
                                 </div>

@@ -71,3 +71,8 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - The denominator is now only the subscriptions whose 2nd payment was due by now: the scheduled next payment for a sub still on its first cycle, otherwise sign-up + one billing cycle. A sub that signed up yesterday is excluded rather than counted as a failure.
 - Each row shows "n eligible". The confidence range and the "n too small" flag use that n.
 - Baseline: Klaviyo, mostly recent sign-ups, is judged on 19 of its 30 subscriptions: 42.1%.
+
+### P1-10: One-time → subscription conversion
+- A one-time purchase is now always a **completed** order worth **more than £0**. Customers whose only one-time order was free or unpaid no longer appear.
+- A conversion needs the subscription to start at least one UK calendar day after the first one-time purchase. An **Include same-day sign-ups** toggle restores the old reading. It replaces the "Completed one-time orders only" toggle, which is now always on.
+- Baseline: 17.3% → 17.0% (171 of 1,004).

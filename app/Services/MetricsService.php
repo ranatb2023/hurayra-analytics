@@ -2040,17 +2040,24 @@ class MetricsService
      * an email is missing. `customer_id = 0` is WooCommerce's guest marker and
      * is never used as an identity — every guest shares it.
      *
-     * Spend columns always sum **completed** orders only, whatever the
-     * `$completedOnly` switch does to the counting.
+     * A one-time PURCHASE is a completed one-time order worth more than £0.
+     * Free orders (samples, replacements) and orders that were never paid were
+     * counting as purchases, and same-day sign-ups -- a customer checking out
+     * a subscription and a one-off together -- as conversions. Both inflated
+     * the conversion rate. A conversion now needs the subscription to start
+     * at least one UK calendar day after the first one-time purchase;
+     * `$includeSameDay` restores the old reading.
      *
-     * @param  bool  $conversionsOnly  keep only customers whose subscription started on/after their first one-time order
-     * @param  bool  $completedOnly  treat only completed one-time orders as a purchase
+     * @param  bool  $conversionsOnly  keep only customers who converted
+     * @param  bool  $includeSameDay  count a subscription started the same day as a conversion
      * @param  int  $limit  max rows returned (0 = all); the summary always counts everything
      * @return array{customers: array<int, array<string, mixed>>, summary: array<string, mixed>, total: int}
      */
-    public function oneTimeToSubscription(bool $conversionsOnly = true, bool $completedOnly = false, int $limit = 0): array
+    public function oneTimeToSubscription(bool $conversionsOnly = true, bool $includeSameDay = false, int $limit = 0): array
     {
         $key = $this->customerKeyExpr();
+        $purchase = fn (Builder $q) => $q->where('status', 'completed')->where('total_amount', '>', 0);
+        $minDays = $includeSameDay ? 0 : 1;
 
         // One-time orders, aggregated per customer. The key is computed in a
         // derived table so the GROUP BY is on a plain column — grouping by the
@@ -2060,7 +2067,7 @@ class MetricsService
             ->whereIn('status', Record::ORDER_STATUSES)
             ->where('order_relationship', 'one_time')
             ->whereNotNull('date_created_gmt')
-            ->when($completedOnly, fn (Builder $q) => $q->where('status', 'completed'))
+            ->where($purchase)
             ->selectRaw("{$key} as ckey, date_created_gmt, status, total_amount, billing_email, customer_id");
 
         $oneTime = DB::query()->fromSub($oneTimeRows, 'ot')
@@ -2083,7 +2090,7 @@ class MetricsService
             ->where('order_relationship', 'one_time')
             ->whereNotNull('date_created_gmt')
             ->whereRaw("({$key}) IS NOT NULL")
-            ->when($completedOnly, fn (Builder $q) => $q->where('status', 'completed'))
+            ->where($purchase)
             ->selectRaw("{$key} as ckey, utm_source, utm_medium, utm_campaign, attribution_type")
             ->orderBy('date_created_gmt')
             ->get()
@@ -2128,12 +2135,22 @@ class MetricsService
             }
 
             $firstOneTime = (string) $ot->first_at;
+            $firstDay = Clock::toLocal($firstOneTime)->startOfDay();
 
-            // First subscription taken out on/after the first one-time order.
+            // First subscription taken out at least $minDays UK calendar days
+            // after the first one-time purchase.
             $sub = null;
+            $days = null;
             foreach ($customerSubs as $candidate) {
-                if ((string) $candidate->date_created_gmt >= $firstOneTime) {
+                if ((string) $candidate->date_created_gmt < $firstOneTime) {
+                    continue;
+                }
+
+                $gap = (int) $firstDay->diffInDays(Clock::toLocal((string) $candidate->date_created_gmt)->startOfDay());
+
+                if ($gap >= $minDays) {
                     $sub = $candidate;
+                    $days = $gap;
                     break;
                 }
             }
@@ -2142,14 +2159,10 @@ class MetricsService
 
             if (! $isConversion) {
                 if ($conversionsOnly) {
-                    continue; // subscribed before ever buying one-off
+                    continue; // subscribed first, or the same day
                 }
                 $sub = $customerSubs->first();
             }
-
-            $days = $isConversion
-                ? (int) floor((strtotime((string) $sub->date_created_gmt) - strtotime($firstOneTime)) / 86400)
-                : null;
 
             if ($isConversion) {
                 $converted++;

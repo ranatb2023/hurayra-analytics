@@ -90,7 +90,7 @@ class MetricsController extends Controller
     {
         return response()->json($this->metrics->oneTimeToSubscription(
             conversionsOnly: $request->boolean('conversions_only', true),
-            completedOnly: $request->boolean('completed_only'),
+            includeSameDay: $request->boolean('include_same_day'),
             limit: min(5000, max(1, (int) $request->integer('limit', 500))),
         ));
     }
@@ -100,7 +100,7 @@ class MetricsController extends Controller
     {
         $data = $this->metrics->oneTimeToSubscription(
             conversionsOnly: $request->boolean('conversions_only', true),
-            completedOnly: $request->boolean('completed_only'),
+            includeSameDay: $request->boolean('include_same_day'),
         );
 
         return response()->streamDownload(function () use ($data) {

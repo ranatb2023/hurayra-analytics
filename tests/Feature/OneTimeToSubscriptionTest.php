@@ -81,10 +81,11 @@ class OneTimeToSubscriptionTest extends TestCase
         $this->seedJourneys();
         $result = $this->metrics->oneTimeToSubscription();
 
-        // A, E and F converted. B subscribed first, C never subscribed, D never
-        // bought one-off, and the two guest rows share no identity.
-        $this->assertSame(['a@example.com', 'f@example.com', 'cid:55'], array_column($result['customers'], 'key'));
-        $this->assertSame(3, $result['total']);
+        // A and E converted. B subscribed first, C never subscribed, D never
+        // bought one-off, F's only one-time order was cancelled (not a
+        // purchase), and the two guest rows share no identity.
+        $this->assertSame(['a@example.com', 'cid:55'], array_column($result['customers'], 'key'));
+        $this->assertSame(2, $result['total']);
 
         $a = $result['customers'][0];
         $this->assertSame('2026-01-10 00:00:00', $a['first_one_time_at']);
@@ -98,7 +99,7 @@ class OneTimeToSubscriptionTest extends TestCase
         $this->assertTrue($a['is_conversion']);
 
         // E has no email at all - identified by customer_id.
-        $e = $result['customers'][2];
+        $e = $result['customers'][1];
         $this->assertNull($e['email']);
         $this->assertSame(55, $e['customer_id']);
         $this->assertSame(30, $e['days_to_convert']);
@@ -149,10 +150,10 @@ class OneTimeToSubscriptionTest extends TestCase
         $this->assertNull($rows->firstWhere('key', 'i@example.com')['one_time_source']);
     }
 
-    public function test_completed_only_moves_the_source_to_the_first_paid_order(): void
+    public function test_the_source_is_the_first_paid_order(): void
     {
-        // The first order failed. With the switch on, the list's first-order
-        // date moves to the completed one - and so must its source.
+        // The first order failed, so it was never a purchase: the list's
+        // first-order date is the completed one - and so is its source.
         $this->record(40, ['record_type' => 'shop_order', 'order_relationship' => 'one_time', 'status' => 'failed',
             'date_created_gmt' => '2026-01-10 00:00:00', 'billing_email' => 'j@example.com', 'customer_id' => 40,
             'total_amount' => 40, 'utm_source' => 'facebook']);
@@ -162,12 +163,9 @@ class OneTimeToSubscriptionTest extends TestCase
         $this->record(42, ['record_type' => 'shop_subscription', 'status' => 'active',
             'date_created_gmt' => '2026-03-01 00:00:00', 'billing_email' => 'j@example.com', 'customer_id' => 40]);
 
-        $all = collect($this->metrics->oneTimeToSubscription()['customers'])->firstWhere('key', 'j@example.com');
-        $this->assertSame('facebook', $all['one_time_source']);
-
-        $paid = collect($this->metrics->oneTimeToSubscription(completedOnly: true)['customers'])
-            ->firstWhere('key', 'j@example.com');
+        $paid = collect($this->metrics->oneTimeToSubscription()['customers'])->firstWhere('key', 'j@example.com');
         $this->assertSame('newsletter', $paid['one_time_source']);
+        $this->assertSame('2026-02-10 00:00:00', $paid['first_one_time_at']);
     }
 
     public function test_summary_counts_every_one_time_buyer(): void
@@ -175,10 +173,11 @@ class OneTimeToSubscriptionTest extends TestCase
         $this->seedJourneys();
         $s = $this->metrics->oneTimeToSubscription()['summary'];
 
-        $this->assertSame(5, $s['one_time_customers']); // A, B, C, E, F (guests have no identity)
-        $this->assertSame(3, $s['converted']);
-        $this->assertSame(60.0, $s['conversion_rate']);
-        $this->assertSame(37, $s['avg_days_to_convert']); // (50 + 31 + 30) / 3
+        // A, B, C, E. F only had a cancelled order; guests have no identity.
+        $this->assertSame(4, $s['one_time_customers']);
+        $this->assertSame(2, $s['converted']);
+        $this->assertSame(50.0, $s['conversion_rate']);
+        $this->assertSame(40, $s['avg_days_to_convert']); // (50 + 30) / 2
         $this->assertSame(100.0, $s['subscription_revenue']);
     }
 
@@ -194,18 +193,64 @@ class OneTimeToSubscriptionTest extends TestCase
         $this->assertSame('2026-01-05 00:00:00', $b['subscribed_at']);
 
         // The summary still only counts real conversions.
-        $this->assertSame(3, $result['summary']['converted']);
+        $this->assertSame(2, $result['summary']['converted']);
     }
 
-    public function test_completed_only_ignores_unpaid_one_time_orders(): void
+    public function test_unpaid_one_time_orders_are_not_purchases(): void
     {
         $this->seedJourneys();
-        $result = $this->metrics->oneTimeToSubscription(completedOnly: true);
+        $result = $this->metrics->oneTimeToSubscription(conversionsOnly: false);
 
-        // F's only one-time order was cancelled, so they are no longer a one-time buyer.
-        $this->assertSame(['a@example.com', 'cid:55'], array_column($result['customers'], 'key'));
-        $this->assertSame(4, $result['summary']['one_time_customers']);
-        $this->assertSame(50.0, $result['summary']['conversion_rate']);
+        // F's only one-time order was cancelled, so F is not a one-time buyer.
+        $this->assertNull(collect($result['customers'])->firstWhere('key', 'f@example.com'));
+    }
+
+    public function test_a_customer_whose_only_one_time_order_was_free_does_not_appear(): void
+    {
+        $this->record(50, ['record_type' => 'shop_order', 'order_relationship' => 'one_time', 'status' => 'completed',
+            'date_created_gmt' => '2026-01-10 00:00:00', 'billing_email' => 'k@example.com', 'customer_id' => 50,
+            'total_amount' => 0]);
+        $this->record(51, ['record_type' => 'shop_subscription', 'status' => 'active',
+            'date_created_gmt' => '2026-02-01 00:00:00', 'billing_email' => 'k@example.com', 'customer_id' => 50]);
+
+        $result = $this->metrics->oneTimeToSubscription(conversionsOnly: false);
+
+        $this->assertSame([], $result['customers']);
+        $this->assertSame(0, $result['summary']['one_time_customers']);
+    }
+
+    public function test_a_same_day_sign_up_is_not_a_conversion_unless_asked(): void
+    {
+        // 09:00 one-off, 09:05 subscription: one checkout, not a conversion.
+        $this->record(60, ['record_type' => 'shop_order', 'order_relationship' => 'one_time', 'status' => 'completed',
+            'date_created_gmt' => '2026-05-10 08:00:00', 'billing_email' => 'l@example.com', 'customer_id' => 60,
+            'total_amount' => 12]);
+        $this->record(61, ['record_type' => 'shop_subscription', 'status' => 'active',
+            'date_created_gmt' => '2026-05-10 08:05:00', 'billing_email' => 'l@example.com', 'customer_id' => 60]);
+
+        $default = $this->metrics->oneTimeToSubscription();
+        $this->assertSame(0, $default['summary']['converted']);
+        $this->assertSame(0.0, $default['summary']['conversion_rate']);
+
+        $withSameDay = $this->metrics->oneTimeToSubscription(includeSameDay: true);
+        $this->assertSame(1, $withSameDay['summary']['converted']);
+        $this->assertSame(0, $withSameDay['customers'][0]['days_to_convert']);
+    }
+
+    public function test_the_day_gap_is_a_uk_calendar_day(): void
+    {
+        // 23:30 BST on 10 May then 00:30 BST on 11 May: an hour apart, but the
+        // next UK day, so it converts with a 1-day gap.
+        $this->record(70, ['record_type' => 'shop_order', 'order_relationship' => 'one_time', 'status' => 'completed',
+            'date_created_gmt' => '2026-05-10 22:30:00', 'billing_email' => 'm@example.com', 'customer_id' => 70,
+            'total_amount' => 12]);
+        $this->record(71, ['record_type' => 'shop_subscription', 'status' => 'active',
+            'date_created_gmt' => '2026-05-10 23:30:00', 'billing_email' => 'm@example.com', 'customer_id' => 70]);
+
+        $row = $this->metrics->oneTimeToSubscription()['customers'][0];
+
+        $this->assertTrue($row['is_conversion']);
+        $this->assertSame(1, $row['days_to_convert']);
     }
 
     public function test_limit_caps_rows_but_not_the_total(): void
@@ -214,8 +259,8 @@ class OneTimeToSubscriptionTest extends TestCase
         $result = $this->metrics->oneTimeToSubscription(limit: 1);
 
         $this->assertCount(1, $result['customers']);
-        $this->assertSame(3, $result['total']);
-        $this->assertSame(3, $result['summary']['converted']);
+        $this->assertSame(2, $result['total']);
+        $this->assertSame(2, $result['summary']['converted']);
     }
 
     public function test_endpoint_returns_the_list(): void
@@ -224,8 +269,8 @@ class OneTimeToSubscriptionTest extends TestCase
 
         $this->getJson('/api/metrics/one-time-to-subscription')
             ->assertOk()
-            ->assertJsonPath('total', 3)
-            ->assertJsonPath('summary.converted', 3)
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('summary.converted', 2)
             ->assertJsonPath('customers.0.email', 'a@example.com')
             ->assertJsonPath('customers.0.subscribed_at', '2026-03-01 00:00:00');
     }

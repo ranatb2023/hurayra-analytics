@@ -75,7 +75,7 @@ export default (config = {}) => ({
     upsellLoading: false,
     upsellError: null,
     upsellConversionsOnly: true,   // subscription must start on/after the one-time order
-    upsellCompletedOnly: false,    // count only completed one-time orders
+    upsellIncludeSameDay: false,   // count a same-day sign-up as a conversion
     upsellSearch: '',
     upsellShown: 25,
 
@@ -528,7 +528,7 @@ export default (config = {}) => ({
     upsellParams() {
         const p = new URLSearchParams();
         p.set('conversions_only', this.upsellConversionsOnly ? '1' : '0');
-        p.set('completed_only', this.upsellCompletedOnly ? '1' : '0');
+        p.set('include_same_day', this.upsellIncludeSameDay ? '1' : '0');
         return p;
     },
 
