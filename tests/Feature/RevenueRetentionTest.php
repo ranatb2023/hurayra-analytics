@@ -309,7 +309,9 @@ class RevenueRetentionTest extends TestCase
         $this->assertSame(50.0, $row['retained_pct']);
         $this->assertSame(100.0, $row['total_spend']);
         $this->assertSame(50.0, $row['value_per_subscriber']);
-        $this->assertSame(31, $row['median_tenure_days']);
+        // Sub 2 lasted 31 days; sub 1 is still running, 217 days to the frozen
+        // "now" of 8 Oct. The median is over both, not just the leaver.
+        $this->assertSame(124, $row['median_tenure_days']);
         $this->assertFalse($row['immature']);
     }
 

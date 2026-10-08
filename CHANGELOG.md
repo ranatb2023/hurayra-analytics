@@ -57,3 +57,7 @@ All notable changes to Hurayra Analytics. One entry per audit task
 ### P1-6: Invalid order statuses
 - Orders count only with a real order status (completed, processing, pending, on-hold, cancelled, failed, refunded). The three `shop_order` rows with the subscription status `wc-active` (#5209, #5230, #6049) are excluded from every metric and trend, as WP Admin excludes them. They are not modified.
 - The dashboard order count is now 3,987, matching WP Admin "All" (the source holds 3,990). The rows are listed on the Data Health page (P3-3).
+
+### P1-7: Cohort median tenure
+- Tenure = (end date, or now if still running) − start date, for every subscription in the cohort; the median is over all of them. Only the leavers were counted before.
+- Baseline: the Aug 26 cohort (56% still active) goes from a median of 5 days to 41.

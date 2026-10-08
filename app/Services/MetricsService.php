@@ -1759,12 +1759,19 @@ class MetricsService
                 $cohorts[$month]['active']++;
             }
 
-            if ($sub['terminal'] && $sub['ended'] !== null) {
+            $ended = $sub['terminal'] && $sub['ended'] !== null && $sub['ended'] <= $asOf;
+
+            if ($ended) {
                 $cohorts[$month]['churned']++;
-                $cohorts[$month]['tenures'][] = (int) max(0, floor(
-                    CarbonImmutable::parse($sub['created'])->diffInDays(CarbonImmutable::parse($sub['ended']))
-                ));
             }
+
+            // Tenure for EVERY subscription: to its end date if it has ended,
+            // otherwise to now. Counting only the leavers gave a cohort that
+            // is 57% still active a median tenure of 5 days -- the median of
+            // the ones who left fast, not of the cohort.
+            $cohorts[$month]['tenures'][] = (int) max(0, floor(
+                CarbonImmutable::parse($sub['created'])->diffInDays(CarbonImmutable::parse($ended ? $sub['ended'] : $asOf))
+            ));
         }
 
         krsort($cohorts);
