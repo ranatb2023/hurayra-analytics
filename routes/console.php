@@ -11,3 +11,6 @@ Artisan::command('inspire', function () {
 
 // Refresh the Klaviyo snapshots (current week/month/year) hourly.
 Schedule::job(new SyncKlaviyoMetrics)->hourly()->withoutOverlapping();
+
+// "No orders for N hours" alert. Fires once per incident; see NoOrdersAlert.
+Schedule::command('alerts:no-orders')->hourly()->withoutOverlapping();

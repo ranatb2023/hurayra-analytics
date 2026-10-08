@@ -21,3 +21,8 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - A strip at the top of every page shows the last import (or sync), the latest order's ID and UK time, and the dashboard order count against the source count.
 - Green under 12 hours since the last order, amber under 24, red beyond. On the baseline data it is red and names 1 Oct.
 - When the selected period extends past the data the strip adds "Data ends {date}. Figures after this are not real zeros."
+
+### P0-4: "No orders" alert
+- `php artisan alerts:no-orders`, scheduled hourly: when no new order has arrived for `ALERT_NO_ORDERS_HOURS` (default 12) between 08:00 and 23:00 UK time, it emails `ALERT_EMAIL_TO` and, if set, posts to `ALERT_SLACK_WEBHOOK`.
+- Each incident is logged in `alert_incidents`, keyed on the last order before the silence, so it fires once per incident and re-arms only after a new order arrives.
+- Requires `php artisan migrate` (new `alert_incidents` table).
