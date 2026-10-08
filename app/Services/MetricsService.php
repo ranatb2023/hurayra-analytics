@@ -230,10 +230,17 @@ class MetricsService
         $totalSubs = $this->subscriptions()->where('date_created_gmt', '<', $endS)->count();
         $churned = ($statusBreakdownSub['cancelled'] ?? 0) + ($statusBreakdownSub['expired'] ?? 0);
 
-        // Monthly churn: who left DURING the window, over the base that was
-        // active when it opened. Unlike the lifetime rate above this is a flow,
-        // so it moves month to month instead of only ever climbing.
+        // Monthly churn: who left DURING the window, over everyone who could
+        // have left -- the subscribers active when it opened PLUS the ones who
+        // joined during it. Dividing by the opening base alone counted
+        // same-month joiners who cancelled in the numerator but never in the
+        // denominator, which is how October 2025 reported 165.5%.
         $activeAtStart = $this->activeAsOf($startS);
+        $newInPeriod = $this->subscriptions()
+            ->where('date_created_gmt', '>=', $startS)
+            ->where('date_created_gmt', '<', $endS)
+            ->count();
+        $churnBase = $activeAtStart + $newInPeriod;
         $churnedInPeriod = $this->churnedBetween($startS, $endS);
 
         // Subscriptions that ended having never completed an order are a broken
@@ -266,10 +273,7 @@ class MetricsService
             'snapshot_capped' => $capped,
 
             // ----- Subscriptions -----
-            'new_subscribers' => $this->subscriptions()
-                ->where('date_created_gmt', '>=', $startS)
-                ->where('date_created_gmt', '<', $endS)
-                ->count(),
+            'new_subscribers' => $newInPeriod,
             'subscribers_active' => $active,
             'pending_cancellation' => $this->snapshotCount('pending-cancel', $endS),
             'on_hold' => $this->snapshotCount('on-hold', $endS),
@@ -313,18 +317,16 @@ class MetricsService
             'subscription_status_breakdown' => $statusBreakdownSub,
             'total_subscriptions' => $totalSubs,
             'churn_rate' => $totalSubs > 0 ? round($churned / $totalSubs * 100, 1) : 0.0,
-            'monthly_churn_rate' => $activeAtStart > 0
-                ? round($churnedInPeriod / $activeAtStart * 100, 1)
-                : null, // undefined with no subscribers to lose
+            // churned ÷ (active at start + new in period)
+            'monthly_churn_rate' => $this->churnRate($churnedInPeriod, $churnBase),
             'churned_in_period' => $churnedInPeriod,
             'failed_signups' => $failedSignups,
             'churned_net_of_failed' => $realChurn,
             // The rate with never-activated subscriptions taken out. Shown
             // alongside the gross rate rather than replacing it, so a month's
             // published figure never silently changes meaning.
-            'monthly_churn_rate_net' => $activeAtStart > 0
-                ? round($realChurn / $activeAtStart * 100, 1)
-                : null,
+            'monthly_churn_rate_net' => $this->churnRate($realChurn, $churnBase),
+            'churn_base' => $churnBase,
             'on_hold_dormant' => $this->dormantOnHold($endS),
             'mrr' => $recurring['mrr'],
             'arr' => $recurring['arr'],
@@ -751,7 +753,7 @@ class MetricsService
                 'churned' => $churned,
                 'paused' => $paused,
                 'active_end' => $activeEnd,
-                'churn_rate' => $activeStart > 0 ? round($churned / $activeStart * 100, 1) : null,
+                'churn_rate' => $this->churnRate($churned, $activeStart + $joined),
                 // The month the data stops inside is only counted up to the
                 // last row imported. Charting it undashed draws a cliff that is
                 // missing rows, not lost subscribers.
@@ -868,6 +870,7 @@ class MetricsService
             $endS = Clock::gmt($monthEnd);
 
             $activeStart = 0;
+            $joined = 0;
             $churned = 0;
             $failed = 0;
             $base = 0.0;
@@ -878,6 +881,10 @@ class MetricsService
 
                 if ($open) {
                     $activeStart++;
+                }
+
+                if ($sub['created'] >= $startS && $sub['created'] < $endS) {
+                    $joined++;
                 }
 
                 $leftNow = $sub['terminal'] && $sub['ended'] !== null
@@ -911,7 +918,7 @@ class MetricsService
 
             $rows[] = [
                 'month' => $cursor->format('Y-m'),
-                'churn_net' => $activeStart > 0 ? round($real / $activeStart * 100, 1) : null,
+                'churn_net' => $this->churnRate($real, $activeStart + $joined),
                 'nrr' => $base > 0 ? round($retained / $base * 100, 1) : null,
                 'partial' => $latest->lt($monthEnd),
             ];
@@ -3048,6 +3055,16 @@ class MetricsService
             'week' => $latest->format('o-\WW'),
             default => $latest->format('Y-m'),
         };
+    }
+
+    /**
+     * The one churn-rate formula: leavers over everyone who could have left in
+     * the period (active at its start plus those who joined during it). Null
+     * when nobody could have left.
+     */
+    private function churnRate(int $churned, int $base): ?float
+    {
+        return $base > 0 ? round($churned / $base * 100, 1) : null;
     }
 
     /** Build per-metric current/previous/change deltas. */

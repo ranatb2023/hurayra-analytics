@@ -26,3 +26,8 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - `php artisan alerts:no-orders`, scheduled hourly: when no new order has arrived for `ALERT_NO_ORDERS_HOURS` (default 12) between 08:00 and 23:00 UK time, it emails `ALERT_EMAIL_TO` and, if set, posts to `ALERT_SLACK_WEBHOOK`.
 - Each incident is logged in `alert_incidents`, keyed on the last order before the silence, so it fires once per incident and re-arms only after a new order arrives.
 - Requires `php artisan migrate` (new `alert_incidents` table).
+
+### P1-1: Monthly churn rate denominator
+- Churn rate = churned ÷ (active at start + new in period), for both the Real and Gross variants and for every month in the history. Exposed as `churn_base`.
+- Same-month joiners who leave are now in the denominator as well as the numerator, so no month can exceed 100%. On the baseline data October 2025 goes from 165.5% to 46.6%.
+- The formula is in the tooltip on both churn cards and in the Retention caption.

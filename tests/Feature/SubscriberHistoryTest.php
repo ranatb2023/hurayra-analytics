@@ -107,23 +107,33 @@ class SubscriberHistoryTest extends TestCase
         $this->assertSame(1, $this->month(2026, 7)['subscribers_active']);
     }
 
-    public function test_monthly_churn_rate_is_leavers_over_the_opening_base(): void
+    public function test_monthly_churn_rate_is_leavers_over_the_opening_base_plus_joiners(): void
     {
         $june = $this->month(2026, 6);
 
-        // Active on 1 June: S1 and S2 (S3 ended in April, S5 in May). S2 leaves.
+        // Active on 1 June: S1 and S2 (S3 ended in April, S5 in May); nobody
+        // joins in June, so the base is just those two. S2 leaves.
         $this->assertSame(2, $june['active_at_period_start']);
         $this->assertSame(1, $june['churned_in_period']);
         $this->assertSame(50.0, $june['monthly_churn_rate']);
     }
 
-    public function test_monthly_churn_rate_is_null_without_an_opening_base(): void
+    public function test_monthly_churn_rate_is_null_with_nobody_who_could_leave(): void
     {
-        // Nobody had signed up before January 2026.
+        // Nobody had signed up by the end of December 2025: no base, no rate.
+        $december = $this->month(2025, 12);
+
+        $this->assertSame(0, $december['churn_base']);
+        $this->assertNull($december['monthly_churn_rate']);
+    }
+
+    public function test_january_joiners_are_in_the_base_even_with_no_opening_book(): void
+    {
         $january = $this->month(2026, 1);
 
         $this->assertSame(0, $january['active_at_period_start']);
-        $this->assertNull($january['monthly_churn_rate']);
+        $this->assertSame($january['new_subscribers'], $january['churn_base']);
+        $this->assertNotNull($january['monthly_churn_rate']);
     }
 
     public function test_churn_series_reports_a_fixed_month_by_month_history(): void

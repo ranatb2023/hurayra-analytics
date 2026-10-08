@@ -26,6 +26,7 @@
         ['Monthly Churn Rate', $pct($m['monthly_churn_rate'] ?? null)],
         ['Subscribers Lost', number_format($m['churned_in_period'] ?? 0)],
         ['Active at Period Start', number_format($m['active_at_period_start'] ?? 0)],
+        ['Churn Base (active at start + new)', number_format($m['churn_base'] ?? 0)],
         ['Renewal Success', $pct($m['renewal_success_rate'] ?? null)],
     ];
     $orderRows = [

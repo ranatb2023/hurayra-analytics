@@ -1326,7 +1326,7 @@ export default (config = {}) => ({
         if (!m || !Object.keys(m).length) return '';
         return `${this.periodLabel}: ${this.value('new_subscribers')} new subscribers, `
             + `${this.value('churned_in_period')} churned (${this.value('monthly_churn_rate')} of `
-            + `${this.value('active_at_period_start')} at the start), ${this.value('total_revenue')} revenue across `
+            + `${this.value('churn_base')} active at the start or joining), ${this.value('total_revenue')} revenue across `
             + `${this.value('completed')} completed orders, ${this.value('unique_customers')} customers.`;
     },
 

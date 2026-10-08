@@ -97,8 +97,10 @@ class RevenueRetentionTest extends TestCase
         $this->assertSame(4, $m['active_at_period_start']);
         $this->assertSame(2, $m['churned_in_period']);
         $this->assertSame(1, $m['failed_signups']);
-        $this->assertSame(50.0, $m['monthly_churn_rate']);
-        $this->assertSame(25.0, $m['monthly_churn_rate_net']);
+        // Base = 4 active at the start + 1 who joined in June (sub 9).
+        $this->assertSame(5, $m['churn_base']);
+        $this->assertSame(40.0, $m['monthly_churn_rate']);
+        $this->assertSame(20.0, $m['monthly_churn_rate_net']);
     }
 
     // ------------------------------------------------------------ dormant holds

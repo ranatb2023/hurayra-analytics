@@ -88,13 +88,13 @@
 
     $retentionCards = [
         'monthly_churn_rate_net' => $M('Churn · Real', $icons['x_circle'], 1, 'bad', "'excludes failed sign-ups'",
-            'Subscribers lost during the period, minus those that never completed an order, over the number active when it opened.'),
+            'Churn · Real = (subscribers lost − failed sign-ups) ÷ (active at period start + new in period) × 100. Failed sign-ups ended without ever completing an order.'),
         'net_revenue_retention' => $M('Net Revenue Retention', $icons['dollar'], 1, 'good', "'of the opening book'",
             'Of the recurring revenue on the books when the period opened, how much was still billing at the end. Counts only subscribers who were already there, so new sign-ups cannot flatter it. Above 100% means upgrades outweighed losses.'),
     ];
     $retentionChips = [
         'monthly_churn_rate' => $M('Churn · Gross', $icons['x_circle'], 2, 'bad', "'all leavers'",
-            'The same rate including failed sign-ups. Kept so a previously published figure never changes meaning.'),
+            'Churn · Gross = subscribers lost ÷ (active at period start + new in period) × 100. Same as Real but failed sign-ups are not taken out.'),
         'customer_churn_rate' => $M('Churn · Customers', $icons['users'], 2, 'bad', "'people, not subscriptions'",
             'A customer has churned only when every subscription they hold has ended. 27% of cancellations belong to people who still have a live one — plan changes the subscription rate reports as losses.'),
         'renewal_success_rate' => $M('Renewal Success', $icons['arrow_path'], 2, 'good'),
@@ -132,7 +132,7 @@
         'net_revenue_retention' => $M('Net Revenue Retention', $icons['scale'], 1, 'good', "'of the opening book'",
             'Of the recurring revenue on the books when the period opened, how much was still billing at the end. New sign-ups are excluded, so it cannot be flattered by acquisition.'),
         'monthly_churn_rate_net' => $M('Churn · Real', $icons['x_circle'], 1, 'bad', "'excludes failed sign-ups'",
-            'Subscribers lost during the period, less those that never completed an order, over the number active when it opened.'),
+            'Churn · Real = (subscribers lost − failed sign-ups) ÷ (active at period start + new in period) × 100. Failed sign-ups ended without ever completing an order.'),
         'total_revenue' => $M('Revenue', $icons['dollar'], 1, 'good', "'completed orders, gross'",
             'Completed orders in the period. Gross — it includes VAT and shipping, which together are about 24% of the figure.'),
     ];
@@ -576,8 +576,10 @@
         Churn · Real = <span class="font-bold text-slate-700" x-text="value('churned_net_of_failed')"></span> real losses
         (<span x-text="value('churned_in_period')"></span> lost, less
         <span x-text="value('failed_signups')"></span> that never ordered)
-        ÷ <span class="font-bold text-slate-700" x-text="value('active_at_period_start')"></span> active when
-        <span class="font-semibold text-slate-600" x-text="periodLabel"></span> opened.
+        ÷ <span class="font-bold text-slate-700" x-text="value('churn_base')"></span>
+        (<span x-text="value('active_at_period_start')"></span> active when
+        <span class="font-semibold text-slate-600" x-text="periodLabel"></span> opened
+        + <span x-text="value('new_subscribers')"></span> who joined during it).
     </p>
 
     {{-- Tenure at churn: the same leavers as the churn rate above, split by how
@@ -699,7 +701,7 @@
                         <th class="px-5 py-2.5 text-right" title="Moved to On Hold or Pending Cancellation this month, net of those that came back. Not churn.">On hold / pending</th>
                         <th class="px-5 py-2.5 text-right">Active at end</th>
                         <th class="px-5 py-2.5 text-right">Net</th>
-                        <th class="px-5 py-2.5 text-right">Churn rate</th>
+                        <th class="px-5 py-2.5 text-right" title="Churned ÷ (active at start + new) × 100">Churn rate</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
