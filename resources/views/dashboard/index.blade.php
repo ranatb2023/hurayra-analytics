@@ -81,7 +81,7 @@
     ];
     $totalChips = [
         'arr' => $M('ARR', $icons['arrow_path'], 2, 'good', null,
-            'MRR x 12. A run rate, not a forecast — it assumes today\'s book bills unchanged for a year.'),
+            'ARR = MRR × 12, using the MRR shown (to the penny). A run rate, not a forecast — it assumes today\'s book bills unchanged for a year.'),
         'arpu' => $M('ARPU · per paying subscriber', $icons['users'], 2, 'good', 'arpuNote()',
             'ARPU = MRR ÷ paying subscribers (active and billed at least once). Active subscriptions that have never been billed have no price yet, so they are left out of both sides.'),
         'average_order_value' => $M('Avg Order Value', $icons['calc'], 2, 'good'),

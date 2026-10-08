@@ -1164,7 +1164,7 @@ class MetricsService
             $rows[] = [
                 'month' => $cursor->format('Y-m'),
                 'mrr' => round($mrr, 2),
-                'arr' => round($mrr * 12, 2),
+                'arr' => round(round($mrr, 2) * 12, 2),
                 // MRR is paying subscribers times what each of them pays.
                 // Carrying both says which of the two actually moved.
                 'arpu' => $paying > 0 ? round($mrr / $paying, 4) : null,
@@ -3024,7 +3024,9 @@ class MetricsService
 
         return [
             'mrr' => round($mrr, 2),
-            'arr' => round($mrr * 12, 2),
+            // From the MRR as displayed, so MRR × 12 = ARR on screen. From the
+            // unrounded figure they disagreed by 2p (52,319.14 vs 52,319.16).
+            'arr' => round(round($mrr, 2) * 12, 2),
             // Per PAYING subscriber: active subscriptions that have never been
             // billed have no price, and dividing by them understated ARPU
             // without saying so. Carried at 4 dp (the UI shows pennies) so

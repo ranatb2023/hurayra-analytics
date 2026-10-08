@@ -66,6 +66,20 @@ class ArpuTest extends TestCase
         $this->assertEqualsWithDelta($m['mrr'], $m['arpu'] * $m['paying_subscribers'], 0.005);
     }
 
+    public function test_arr_is_twelve_times_the_mrr_shown(): void
+    {
+        // A six-weekly plan prices to a fraction of a penny a month:
+        // 21.37 × 30 / 42 = 15.2642...
+        $this->sub(1, '2026-08-01 10:00:00');
+        Record::where('id', 1)->update(['billing_period' => 'week', 'billing_interval' => 6]);
+        $this->paid(101, 1, 21.37);
+
+        $m = $this->october();
+
+        $this->assertSame(15.26, $m['mrr']);
+        $this->assertSame(183.12, $m['arr']); // 15.26 × 12, not 15.2642 × 12 = 183.17
+    }
+
     public function test_mrr_is_built_from_the_same_subscribers_as_the_active_card(): void
     {
         // Live column says active; history says it went on hold in September.

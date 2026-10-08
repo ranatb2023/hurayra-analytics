@@ -105,3 +105,6 @@ All notable changes to Hurayra Analytics. One entry per audit task
 
 ### P2-7: Email "New Subscribers"
 - The Klaviyo tile is now **New list subscribers**: newsletter list sign-ups, not subscription customers. The tooltip says so.
+
+### P2-8: ARR reconciles with MRR
+- ARR is computed from the MRR as displayed (rounded to the penny) × 12, on the cards and in the monthly series. Baseline: £52,319.16 = £4,359.93 × 12 (was £52,319.14). The tooltip gives the formula.
