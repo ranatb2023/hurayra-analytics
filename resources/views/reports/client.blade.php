@@ -16,6 +16,7 @@
     $subscriptionRows = [
         ['New Subscribers', $m['new_subscribers']],
         ['Active Subscribers', $m['subscribers_active']],
+        ['Awaiting Payment', $m['awaiting_payment'] ?? 0],
         ['Pending Cancellation', $m['pending_cancellation']],
         ['On Hold', $m['on_hold']],
         ['Cancelled · No Purchase', $m['cancelled_without_purchase']],

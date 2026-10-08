@@ -896,12 +896,29 @@ export default (config = {}) => ({
         return this.liveStatusRows().reduce((n, r) => n + r.count, 0);
     },
 
-    /** Live states with a share of the live book, biggest first, zeros dropped. */
+    // WooCommerce's slugs read badly: `pending` is a subscription waiting for
+    // its first payment, which is nothing like `pending-cancel`.
+    statusLabels: {
+        active: 'Active', 'on-hold': 'On hold', pending: 'Awaiting payment',
+        'pending-cancel': 'Pending cancellation', cancelled: 'Cancelled', expired: 'Expired',
+    },
+
+    statusLabel(st) {
+        return this.statusLabels[st] ?? String(st).replace('-', ' ');
+    },
+
+    /**
+     * Live states with a share of the live book, biggest first. Zeros are
+     * dropped -- except the two pending states, which are always listed so
+     * "Awaiting payment" and "Pending cancellation" are never confused by one
+     * of them being missing.
+     */
     liveStatusRows() {
         const b = this.metrics.subscription_status_breakdown || {};
+        const always = ['pending', 'pending-cancel'];
         const rows = this.liveStatuses
-            .filter((st) => (b[st] ?? 0) > 0)
-            .map((st) => ({ status: st, label: st.replace('-', ' '), count: b[st], color: this.statusColors[st] || '#cbd5e1' }));
+            .filter((st) => (b[st] ?? 0) > 0 || always.includes(st))
+            .map((st) => ({ status: st, label: this.statusLabel(st), count: b[st] ?? 0, color: this.statusColors[st] || '#cbd5e1' }));
         const total = rows.reduce((n, r) => n + r.count, 0) || 1;
 
         return rows

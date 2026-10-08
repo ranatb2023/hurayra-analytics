@@ -39,7 +39,7 @@
         <template x-for="row in liveStatusRows()" :key="row.status">
             <div class="flex items-center gap-2.5 text-sm">
                 <span class="h-2.5 w-2.5 shrink-0 rounded-full" :style="`background: ${row.color}`"></span>
-                <span class="flex-1 truncate capitalize text-slate-600" x-text="row.label"></span>
+                <span class="flex-1 truncate text-slate-600" x-text="row.label"></span>
                 <span class="w-12 text-right font-semibold tabular-nums text-slate-900" x-text="row.count"></span>
                 <span class="w-12 text-right text-xs tabular-nums text-slate-400" x-text="`${row.pct}%`"></span>
             </div>

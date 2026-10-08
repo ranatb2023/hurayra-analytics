@@ -324,6 +324,9 @@ class MetricsService
             'pending_cancellation_status' => $pendingCancelStatus,
             'scheduled_cancellations' => $scheduledCancellations,
             'on_hold' => $this->snapshotCount('on-hold', $endS),
+            // WooCommerce's `pending` subscription status: created, first
+            // payment not taken yet. Not the same thing as pending cancellation.
+            'awaiting_payment' => $statusBreakdownSub['pending'] ?? 0,
             'cancelled_without_purchase' => $cancelledWithout,
             'cancelled_with_purchase' => $cancelledWith,
 

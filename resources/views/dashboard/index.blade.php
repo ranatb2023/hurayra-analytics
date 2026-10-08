@@ -47,7 +47,9 @@
     $stateChips = [
         'on_hold' => $M('On Hold', $icons['pause'], 2, 'bad', 'onHoldNote()',
             'A live state with no history in the source data, so it is read as-is at the period end.'),
-        'pending_cancellation' => $M('Pending Cancellation', $icons['clock'], 2, 'bad', "'as of the period end'",
+        'awaiting_payment' => $M('Awaiting payment', $icons['clock'], 2, 'flat', 'periodEndNote()',
+            'Awaiting payment = subscriptions in WooCommerce\'s "pending" status: created, first payment not taken yet. Not the same as Pending cancellation.'),
+        'pending_cancellation' => $M('Pending cancellation', $icons['clock'], 2, 'bad', 'periodEndNote()',
             'Pending cancellation = subscriptions in WooCommerce\'s pending-cancel status + cancelled/expired subscriptions whose end date is still in the future. Neither has churned yet.'),
         'failed_signups' => $M('Failed Sign-ups', $icons['exclaim'], 2, 'bad', "'never ordered'",
             'A subset of Subscribers Lost: subscriptions that ended having never completed an order. A checkout defect, not churn — they cost no revenue. Churn · Real excludes them.'),
@@ -297,6 +299,13 @@
                 <h3 class="text-sm font-bold text-slate-700">Subscription mix</h3>
                 <div class="mt-4">
                     @include('dashboard.partials.status-mix', ['compact' => true])
+                </div>
+                {{-- Both pending states, named apart: "pending" alone was read
+                     as either one. --}}
+                <div class="mt-3 grid grid-cols-2 gap-2">
+                    @foreach (['awaiting_payment', 'pending_cancellation'] as $key)
+                        @include('dashboard.partials.stat-chip', ['key' => $key, 'm' => $stateChips[$key]])
+                    @endforeach
                 </div>
             </div>
         </div>
@@ -1191,8 +1200,8 @@
                             <td class="whitespace-nowrap px-3 py-2.5 font-medium text-slate-700" x-text="dateLabel(c.subscribed_at)"></td>
                             <td class="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-500" x-text="daysLabel(c.days_to_convert)"></td>
                             <td class="px-3 py-2.5">
-                                <span class="inline-flex rounded-md px-2 py-0.5 text-xs font-semibold capitalize"
-                                      :class="subStatusClass(c.subscription_status)" x-text="c.subscription_status"></span>
+                                <span class="inline-flex rounded-md px-2 py-0.5 text-xs font-semibold"
+                                      :class="subStatusClass(c.subscription_status)" x-text="statusLabel(c.subscription_status)"></span>
                             </td>
                             <td class="whitespace-nowrap px-5 py-2.5 text-right font-semibold tabular-nums text-slate-900" x-text="money(c.subscription_spend)"></td>
                         </tr>

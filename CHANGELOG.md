@@ -81,3 +81,7 @@ All notable changes to Hurayra Analytics. One entry per audit task
 - The pipeline lists only subscriptions that are **active** now, with a next payment (WooCommerce `_schedule_next_payment`) inside the window. No on-hold subscription appears in it.
 - Subscriptions whose first renewal failed (on hold, paid exactly once) move to a separate **Failed first renewal** list with the date they went on hold, and can be exported.
 - Baseline, next 14 days: 99 renewals, all active (was 105 including on-hold); 23 failed first renewals worth £614 per cycle.
+
+### P2-1: "Pending" vs "Pending cancellation"
+- WooCommerce's `pending` subscription status is now labelled **Awaiting payment** everywhere; `pending-cancel` is **Pending cancellation**.
+- Both are shown on both the Overview (under the subscription mix) and the Subscribers page, and the status mix always lists both, even at zero.
