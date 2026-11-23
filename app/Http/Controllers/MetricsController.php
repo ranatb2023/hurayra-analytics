@@ -40,6 +40,8 @@ class MetricsController extends Controller
             'metric' => ['required', 'string'],
             'granularity' => ['required', 'in:week,month,year,custom'],
             'breakdown' => ['nullable', 'in:'.implode(',', MetricsService::SEGMENT_DIMENSIONS)],
+            'from' => ['nullable', 'date'],
+            'to' => ['nullable', 'date', 'after_or_equal:from'],
         ]);
 
         // The trend spans all data unless a custom window is supplied.
@@ -230,12 +232,75 @@ class MetricsController extends Controller
         }, 'hurayra-renewals-next-'.$days.'-days.csv', ['Content-Type' => 'text/csv']);
     }
 
+    /**
+     * Metric keys as a person reads them, for the CSV. Keys left out are
+     * internal (timestamps, flags) and not exported; a new key that is not
+     * listed here falls back to a readable version of its name.
+     */
+    private const EXPORT_LABELS = [
+        'new_subscribers' => 'New subscribers',
+        'subscribers_active' => 'Active subscribers',
+        'pending_cancellation' => 'Pending cancellation',
+        'on_hold' => 'On hold',
+        'on_hold_manual' => 'On hold · paused manually',
+        'on_hold_payment_due' => 'On hold · payment pending',
+        'awaiting_payment' => 'Awaiting first payment',
+        'cancelled_without_purchase' => 'Cancelled · no purchase',
+        'cancelled_with_purchase' => 'Cancelled · purchased',
+        'one_time_purchase' => 'One-time purchases',
+        'subscription_purchases' => 'Subscription purchases',
+        'renewal_purchases' => 'Renewal purchases',
+        'completed' => 'Completed orders',
+        'new_not_completed' => 'Not paid orders',
+        'total_revenue' => 'Revenue (paid, gross £)',
+        'net_revenue' => 'Net revenue (£)',
+        'tax_collected' => 'Tax collected (£)',
+        'shipping_collected' => 'Shipping collected (£)',
+        'refunded' => 'Refunded (£)',
+        'net_revenue_after_refunds' => 'Net revenue after refunds (£)',
+        'average_order_value' => 'Average order value (£)',
+        'subscription_revenue' => 'Subscription revenue (£)',
+        'one_time_revenue' => 'One-time revenue (£)',
+        'monthly_churn_rate_net' => 'Churn · Real %',
+        'monthly_churn_rate' => 'Churn · Gross %',
+        'monthly_churn_rate_adjusted' => 'Churn · Adjusted %',
+        'churned_net_of_failed' => 'Subscribers lost (real)',
+        'churned_in_period' => 'Subscribers lost (all)',
+        'failed_signups' => 'Failed sign-ups (never paid)',
+        'plan_switches_in_period' => 'Plan switches (restarted within 14 days, not churn)',
+        'churn_base' => 'Churn base (active at start + new)',
+        'active_at_period_start' => 'Active at period start',
+        'on_hold_dormant' => 'Dormant on hold',
+        'churned_adjusted' => 'Lost incl. dormant on hold',
+        'mrr' => 'MRR (£)',
+        'arr' => 'ARR (£)',
+        'arpu' => 'ARPU (£ per paying subscriber per month)',
+        'paying_subscribers' => 'Paying subscribers',
+        'net_revenue_retention' => 'Net revenue retention %',
+        'gross_revenue_retention' => 'Gross revenue retention %',
+        'renewal_success_rate' => 'Renewal success %',
+        'failed_renewals' => 'Failed renewals',
+        'renewals_awaiting_payment' => 'Renewals awaiting payment',
+        'revenue_at_risk' => 'Revenue at risk (£)',
+        'unique_customers' => 'Paying customers',
+        'new_customers' => 'New customers',
+        'returning_customers' => 'Returning customers',
+        'repeat_rate' => 'Repeat rate % (2+ paid orders in period)',
+        'revenue_per_customer' => 'Revenue per customer (£)',
+        'customer_churn_rate' => 'Churn · Customers %',
+    ];
+
+    /** Keys that are bookkeeping, not figures anyone reports. */
+    private const EXPORT_SKIP = ['snapshot_at', 'snapshot_capped', 'net_revenue_known', 'new_not_completed_standard',
+        'new_not_completed_strict', 'pending_cancellation_status', 'cancelled_snapshot', 'active_cancelled_ratio',
+        'churn_rate', 'end_date_coverage', 'recurring_revenue_start', 'recurring_revenue_retained', 'gross_margin_pct'];
+
     /** Audiences a salesperson can act on: cross-sell, win-back, prospects. */
     public const AUDIENCES = [
         'cross_sell' => 'Single-flavour subscribers · Combo upgrade',
         'win_back' => 'Fully churned, 3+ payments · proven buyers',
         'never_subscribed' => 'One-time buyers who never subscribed',
-        'partial_churn' => 'Cancelled one plan, still subscribed · cross-sell',
+        'partial_churn' => 'Cancelled one plan, still subscribed · keep them happy',
     ];
 
     /** AJAX endpoint: one campaign audience. */
@@ -245,7 +310,7 @@ class MetricsController extends Controller
         $key = array_key_exists($key, self::AUDIENCES) ? $key : 'cross_sell';
 
         return response()->json(
-            $this->metrics->audience($key, limit: 500)
+            $this->metrics->audience($key, limit: 50)
             + ['label' => self::AUDIENCES[$key], 'audiences' => self::AUDIENCES]
         );
     }
@@ -290,6 +355,73 @@ class MetricsController extends Controller
         $months = min(60, max(1, (int) $request->integer('months', 12)));
 
         return response()->json($this->metrics->churnSeries($months, $this->lastInstant($request)));
+    }
+
+    /** AJAX endpoint: the cancellation form for the period (reasons, retention offer, rows). */
+    public function cancellationSurveys(Request $request, \App\Services\CancellationSurveyService $surveys): JsonResponse
+    {
+        $period = $this->resolver->resolve($this->validateFilter($request));
+
+        return response()->json($surveys->forPeriod($period->start, $period->end) + ['period' => $period->toArray()]);
+    }
+
+    /** Download the period's cancellation form answers. */
+    public function cancellationSurveysExport(Request $request, \App\Services\CancellationSurveyService $surveys): StreamedResponse
+    {
+        $period = $this->resolver->resolve($this->validateFilter($request));
+        $data = $surveys->forPeriod($period->start, $period->end);
+
+        $filename = 'hurayra-cancellation-reasons-'.str_replace([' ', ':', '–', '/'], '-', $period->label).'.csv';
+
+        return response()->streamDownload(function () use ($data) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, ['Submitted (UK)', 'Subscription ID', 'Survey ID', 'Customer', 'Name', 'Reason', 'Satisfaction',
+                'Would return', 'Feedback', 'Subscription total', 'Retention offer accepted', 'Retention %',
+                'Discount spent on a renewal', 'Subscription status now']);
+
+            foreach ($data['rows'] as $r) {
+                fputcsv($out, [
+                    $r['submitted_at'] ?? '', $r['subscription_id'] ?? '', $r['survey_id'] ?? '', $r['customer'] ?? '',
+                    $r['name'] ?? '', $r['reason_label'], $r['satisfaction'] ?? '', $r['would_return'] ?? '',
+                    $r['feedback'] ?? '', $r['subscription_total'] ?? '', $r['retention_accepted'] ? 'yes' : 'no',
+                    $r['retention_percent'] ?? '', $r['retention_spent'] ? 'yes' : 'no', $r['subscription_status'] ?? '',
+                ]);
+            }
+
+            fclose($out);
+        }, $filename, ['Content-Type' => 'text/csv']);
+    }
+
+    /** AJAX endpoint: every subscription on hold at the period end, with why. */
+    public function onHoldSubscriptions(Request $request): JsonResponse
+    {
+        $period = $this->resolver->resolve($this->validateFilter($request));
+
+        return response()->json($this->metrics->onHoldSubscriptions($period->end) + ['period' => $period->toArray()]);
+    }
+
+    /** Download the on-hold list for the period end. */
+    public function onHoldSubscriptionsExport(Request $request): StreamedResponse
+    {
+        $period = $this->resolver->resolve($this->validateFilter($request));
+        $data = $this->metrics->onHoldSubscriptions($period->end);
+        $labels = ['manual' => 'Paused manually', 'payment_due' => 'Payment pending'];
+
+        $filename = 'hurayra-on-hold-'.str_replace([' ', ':', '–', '/'], '-', $period->label).'.csv';
+
+        return response()->streamDownload(function () use ($data, $labels) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, ['Subscription ID', 'Customer', 'Reason', 'Reason from', 'On hold since (UK)', 'Days on hold', 'Last payment', 'Amount', 'Plan']);
+
+            foreach ($data['rows'] as $r) {
+                fputcsv($out, [
+                    $r['id'], $r['customer'] ?? '', $labels[$r['reason']] ?? $r['reason'], $r['reason_from'],
+                    $r['on_hold_since'] ?? '', $r['days_on_hold'] ?? '', $r['last_payment'] ?? '', $r['amount'] ?? '', $r['plan'] ?? '',
+                ]);
+            }
+
+            fclose($out);
+        }, $filename, ['Content-Type' => 'text/csv']);
     }
 
     /** AJAX endpoint: the subscriptions behind the period's churn number. */
@@ -388,7 +520,9 @@ class MetricsController extends Controller
     {
         $validated = $this->validateFilter($request);
         $period = $this->resolver->resolve($validated);
-        $data = $this->metrics->summary($period, strictNotCompleted: $request->boolean('strict'), compare: $request->boolean('compare'));
+        // Always with the previous period: a CSV with empty Previous and
+        // Change columns is half a report.
+        $data = $this->metrics->summary($period, strictNotCompleted: $request->boolean('strict'), compare: true);
 
         $history = $this->metrics->history();
 
@@ -399,12 +533,12 @@ class MetricsController extends Controller
             fputcsv($out, ['Metric', 'Value', 'Previous', 'Change %']);
 
             foreach ($data['metrics'] as $key => $value) {
-                if (is_array($value)) {
-                    continue; // breakdowns exported separately below
+                if (is_array($value) || in_array($key, self::EXPORT_SKIP, true)) {
+                    continue; // breakdowns exported separately below; bookkeeping not at all
                 }
                 $cmp = $data['comparison'][$key] ?? null;
                 fputcsv($out, [
-                    $key,
+                    self::EXPORT_LABELS[$key] ?? ucfirst(str_replace('_', ' ', $key)),
                     $value,
                     $cmp['previous'] ?? '',
                     $cmp['change'] ?? '',
@@ -413,7 +547,7 @@ class MetricsController extends Controller
 
             // Not-completed status breakdown.
             fputcsv($out, []);
-            fputcsv($out, ['Not-completed status', 'Count']);
+            fputcsv($out, ['Not paid · status', 'Count']);
             foreach (($data['metrics']['not_completed_breakdown'] ?? []) as $status => $count) {
                 fputcsv($out, [$status, $count]);
             }
@@ -433,8 +567,8 @@ class MetricsController extends Controller
             // Month-by-month subscriber history — fixed once a month closes.
             fputcsv($out, []);
             fputcsv($out, [
-                'Month', 'Active at start', 'New', 'Churned', 'Active at end', 'Churn rate %',
-                'Real churn %', 'NRR %', 'MRR', 'Paying subscribers', 'Month complete',
+                'Month', 'Active at start', 'New', 'Churned', 'Active at end', 'Churn · Gross %',
+                'Churn · Real %', 'NRR %', 'MRR', 'Paying subscribers', 'Month complete',
             ]);
             foreach ($history['rows'] as $row) {
                 fputcsv($out, [
@@ -443,8 +577,8 @@ class MetricsController extends Controller
                     $row['new'],
                     $row['churned'],
                     $row['active_end'],
+                    $row['churn_rate_gross'] ?? '',
                     $row['churn_rate'] ?? '',
-                    $row['churn_net'] ?? '',
                     $row['nrr'] ?? '',
                     $row['mrr'] ?? '',
                     $row['paying'] ?? '',
@@ -493,7 +627,7 @@ class MetricsController extends Controller
             'month' => ['nullable', 'integer', 'min:1', 'max:12'],
             'week' => ['nullable', 'integer', 'min:1', 'max:6'],
             'from' => ['nullable', 'date', 'required_if:granularity,custom'],
-            'to' => ['nullable', 'date', 'required_if:granularity,custom'],
+            'to' => ['nullable', 'date', 'required_if:granularity,custom', 'after_or_equal:from'],
         ]);
     }
 }

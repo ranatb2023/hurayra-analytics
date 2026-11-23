@@ -47,7 +47,7 @@
     ];
     $stateChips = [
         'on_hold' => $M('On Hold', $icons['pause'], 2, 'bad', 'onHoldNote()',
-            'On Hold = subscriptions whose status was on-hold at the period end (or data timestamp), from the status history, or estimated as one billing cycle after the last payment where there is none.'),
+            'On Hold = subscriptions whose status was on-hold at the period end (or data timestamp), from the status history, or estimated as one billing cycle after the last payment where there is none. Split by why: Payment pending = WooCommerce paused it because a renewal payment was due ("Subscription renewal payment due" note); Paused manually = any other change to on-hold (the customer or an admin paused it). Without a note, payment pending = an unpaid renewal newer than the last completed order. Dormant = on hold 1.5 billing cycles+ with no payment, counted in Churn · Adjusted.'),
         'awaiting_payment' => $M('Awaiting payment', $icons['clock'], 2, 'flat', 'periodEndNote()',
             'Awaiting payment = subscriptions in WooCommerce\'s "pending" status: created, first payment not taken yet. Not the same as Pending cancellation.'),
         'pending_cancellation' => $M('Pending cancellation', $icons['clock'], 2, 'bad', 'periodEndNote()',
@@ -75,8 +75,8 @@
             'One-time Purchase = orders created in the period not linked to any subscription, in any real order status.'),
         'renewal_purchases' => $M('Renewal Purchases', $icons['arrow_path'], 2, 'good', null,
             'Renewal Purchases = subscription renewal orders created in the period, in any real order status.'),
-        'new_not_completed' => $M('New (not completed)', $icons['exclaim'], 2, 'bad', null,
-            'New (not completed) = orders created in the period with a real order status other than completed. Strict = pending + processing only.'),
+        'new_not_completed' => $M('Not paid', $icons['exclaim'], 2, 'bad', null,
+            'Not paid = orders created in the period that were never paid: cancelled, failed, refunded, pending or on hold. Processing orders are paid and not included. Strict = pending only (still awaiting payment).'),
     ];
 
     $totalCards = [
@@ -95,45 +95,45 @@
         'average_order_value' => $M('Avg Order Value', $icons['calc'], 2, 'good', null,
             'Avg Order Value = Revenue · Gross ÷ completed orders, in the period.'),
         'subscription_revenue' => $M('Subscription Revenue', $icons['arrow_path'], 2, 'good', null,
-            'Subscription Revenue = Σ total charged on completed parent and renewal orders created in the period (gross).'),
+            'Subscription Revenue = Σ total charged on paid (completed or processing) parent and renewal orders created in the period (gross).'),
         'one_time_revenue' => $M('One-time Revenue', $icons['bag'], 2, 'good', null,
-            'One-time Revenue = Σ total charged on completed one-time orders created in the period (gross).'),
+            'One-time Revenue = Σ total charged on paid (completed or processing) one-time orders created in the period (gross).'),
     ];
 
     $retentionCards = [
         'monthly_churn_rate_net' => $M('Churn · Real', $icons['x_circle'], 1, 'bad', "'excludes failed sign-ups'",
-            'Churn · Real = (subscribers lost − failed sign-ups) ÷ (active at period start + new in period) × 100. Failed sign-ups ended without ever completing an order.'),
+            'Churn · Real = (subscribers lost − failed sign-ups) ÷ (active at period start + new in period) × 100. Failed sign-ups ended without ever paying. Anyone who started a new subscription within 14 days of ending is a plan switch and is not counted. This is the headline churn rate, here and on the client report.'),
         'monthly_churn_rate_adjusted' => $M('Churn · Adjusted', $icons['pause'], 1, 'bad', "'includes dormant on-hold'",
-            'Churn · Adjusted = (subscribers lost + on-hold subscriptions that went dormant this period) ÷ (active at period start + new in period) × 100. Dormant = on hold with no successful payment for 1.5 billing cycles (45 days on a monthly plan). Each is counted once, in the period it crosses that line.'),
-        'net_revenue_retention' => $M('Net Revenue Retention', $icons['dollar'], 1, 'good', "'of the opening book'",
+            'Churn · Adjusted = (Real churn losses + on-hold subscriptions that went dormant this period) ÷ (active at period start + new in period) × 100. Built on Real, so the two compare like for like. Dormant = on hold with no successful payment for 1.5 billing cycles (45 days on a monthly plan). Each is counted once, in the period it crosses that line.'),
+        'net_revenue_retention' => $M('Net Revenue Retention', $icons['dollar'], 1, 'good', 'nrrNote()',
             'NRR = (Σ last payment at the period end of the subscribers active when it opened, 0 if they stopped billing) ÷ (Σ their last payment when it opened) × 100. New sign-ups are excluded, so they cannot flatter it. Above 100% means upgrades outweighed losses.'),
     ];
     $retentionChips = [
         'monthly_churn_rate' => $M('Churn · Gross', $icons['x_circle'], 2, 'bad', "'all leavers'",
-            'Churn · Gross = subscribers lost ÷ (active at period start + new in period) × 100. Same as Real but failed sign-ups are not taken out.'),
+            'Churn · Gross = subscribers lost ÷ (active at period start + new in period) × 100. Same as Real but sign-ups that never paid are not taken out. Shown for reference; Real is the headline.'),
         'customer_churn_rate' => $M('Churn · Customers', $icons['users'], 2, 'bad', "'people, not subscriptions'",
             'Churn · Customers = customers (billing email, else customer ID) with an active subscription at the period start and none at its end ÷ customers active at the start × 100. 27% of cancellations belong to people who still have a live one.'),
         'renewal_success_rate' => $M('Renewal Success', $icons['arrow_path'], 2, 'good', null,
-            'Renewal Success = completed renewal orders ÷ all renewal orders created in the period × 100.'),
+            'Renewal Success = paid renewal orders (completed or processing) ÷ (paid + failed renewal orders) created in the period × 100. Renewals still awaiting payment are left out until they are paid or fail.'),
         'revenue_at_risk' => $M('Revenue at Risk', $icons['exclaim'], 2, 'bad', 'revenueAtRiskNote()',
-            'Revenue at Risk = monthly value of every dormant on-hold subscription (last payment × 30 ÷ cycle days) + failed and pending renewal orders in the period. Recoverable, involuntary churn.'),
-        'failed_renewals' => $M('Failed Renewals', $icons['x_circle'], 2, 'bad', null,
-            'Failed Renewals = renewal orders created in the period whose status is not completed.'),
+            'Revenue at Risk = monthly value of every dormant on-hold subscription (last payment × 30 ÷ cycle days) + failed renewal orders + renewal orders still awaiting payment in the period. Recoverable, involuntary churn.'),
+        'failed_renewals' => $M('Failed Renewals', $icons['x_circle'], 2, 'bad', 'failedRenewalsNote()',
+            'Failed Renewals = renewal orders created in the period in failed status. Renewals still pending (awaiting payment) are counted separately underneath; processing renewals are paid.'),
     ];
 
     $customerCards = [
-        'unique_customers' => $M('Unique Customers', $icons['users'], 1, 'good', null,
-            'Unique Customers = distinct customer IDs with an order created in the period.'),
-        'revenue_per_customer' => $M('Revenue / Customer', $icons['dollar'], 1, 'good', null,
-            'Revenue / Customer = Revenue · Gross ÷ Unique Customers, in the period.'),
+        'unique_customers' => $M('Paying Customers', $icons['users'], 1, 'good', "'with a paid order this period'",
+            'Paying Customers = distinct customer IDs with a paid order (completed or processing) created in the period. The same orders Revenue counts, so Revenue / Customer compares like with like.'),
+        'revenue_per_customer' => $M('Revenue / Customer', $icons['dollar'], 1, 'good', "'revenue ÷ paying customers'",
+            'Revenue / Customer = Revenue (paid, gross) ÷ Paying Customers, in the period.'),
     ];
     $customerChips = [
-        'new_customers' => $M('New Customers', $icons['user_plus'], 2, 'good', null,
-            'New Customers = customers whose first-ever order was created in the period.'),
-        'returning_customers' => $M('Returning Customers', $icons['arrow_path'], 2, 'good', null,
-            'Returning Customers = Unique Customers − New Customers.'),
-        'repeat_rate' => $M('Repeat Rate', $icons['check_badge'], 2, 'good', null,
-            'Repeat Rate = customers with 2 or more orders in the period ÷ Unique Customers × 100.'),
+        'new_customers' => $M('New Customers', $icons['user_plus'], 2, 'good', "'first paid order ever'",
+            'New Customers = customers whose first-ever paid order was created in the period.'),
+        'returning_customers' => $M('Returning Customers', $icons['arrow_path'], 2, 'good', "'had paid before this period'",
+            'Returning Customers = Paying Customers − New Customers: people who had already paid before the period started.'),
+        'repeat_rate' => $M('Repeat in Period', $icons['check_badge'], 2, 'good', "'2+ paid orders this period'",
+            'Repeat in Period = customers with 2 or more paid orders inside the period ÷ Paying Customers × 100. Not the same as Returning: a monthly subscriber is returning but places one order a month.'),
     ];
 
     // Direction map handed to Alpine so the comparison badge knows which way is
@@ -152,14 +152,14 @@
     $heroCards = [
         'mrr' => $M('MRR', $icons['arrow_path'], 1, 'good', "'recurring, normalised to 30 days'",
             'MRR = Σ over active, billed subscriptions of (last completed payment × 30 ÷ billing-cycle days) — a two-monthly plan at £40 is £20 of MRR. Gross: includes VAT and shipping, like every money figure here.'),
-        'net_revenue_retention' => $M('Net Revenue Retention', $icons['scale'], 1, 'good', "'of the opening book'",
+        'net_revenue_retention' => $M('Net Revenue Retention', $icons['scale'], 1, 'good', 'nrrNote()',
             'NRR = (Σ last payment at the period end of the subscribers active when it opened, 0 if they stopped billing) ÷ (Σ their last payment when it opened) × 100. New sign-ups are excluded.'),
         'monthly_churn_rate_net' => $M('Churn · Real', $icons['x_circle'], 1, 'bad', "'excludes failed sign-ups'",
-            'Churn · Real = (subscribers lost − failed sign-ups) ÷ (active at period start + new in period) × 100. Failed sign-ups ended without ever completing an order.'),
+            'Churn · Real = (subscribers lost − failed sign-ups) ÷ (active at period start + new in period) × 100. Failed sign-ups ended without ever paying. Anyone who started a new subscription within 14 days of ending is a plan switch and is not counted. This is the headline churn rate, here and on the client report.'),
         'monthly_churn_rate_adjusted' => $M('Churn · Adjusted', $icons['pause'], 1, 'bad', "'includes dormant on-hold'",
-            'Churn · Adjusted = (subscribers lost + on-hold subscriptions that went dormant this period) ÷ (active at period start + new in period) × 100. Dormant = on hold with no successful payment for 1.5 billing cycles (45 days on a monthly plan). Each is counted once, in the period it crosses that line.'),
-        'total_revenue' => $M('Revenue', $icons['dollar'], 1, 'good', "'completed orders, gross'",
-            'Revenue = Σ total charged on completed orders created in the period. Gross: it includes VAT and shipping, together about 24% of the figure.'),
+            'Churn · Adjusted = (Real churn losses + on-hold subscriptions that went dormant this period) ÷ (active at period start + new in period) × 100. Built on Real, so the two compare like for like. Dormant = on hold with no successful payment for 1.5 billing cycles (45 days on a monthly plan). Each is counted once, in the period it crosses that line.'),
+        'total_revenue' => $M('Revenue', $icons['dollar'], 1, 'good', "'paid orders, gross'",
+            'Revenue = Σ total charged on paid orders (completed or processing) created in the period. Gross: it includes VAT and shipping, together about 24% of the figure.'),
     ];
 
 @endphp
@@ -202,7 +202,7 @@
                 <template x-if="granularity === 'week'">
                     @include('dashboard.partials.dropdown', [
                         'id' => 'week', 'model' => 'week', 'options' => 'weekOptions()',
-                        'width' => 'w-44', 'compact' => true,
+                        'width' => 'w-36', 'compact' => true,
                     ])
                 </template>
                 @include('dashboard.partials.dropdown', [
@@ -214,8 +214,14 @@
 
         <template x-if="granularity === 'custom'">
             <div class="flex items-center gap-1.5">
-                <input type="date" x-model="from" @change="apply()" class="rounded-lg border-slate-200 py-1.5 text-xs shadow-sm">
-                <input type="date" x-model="to" @change="apply()" class="rounded-lg border-slate-200 py-1.5 text-xs shadow-sm">
+                <label class="flex items-center gap-1 text-[11px] font-medium text-slate-500">From
+                    <input type="date" x-model="from" @change="apply()" :max="todayIso()" aria-label="From date"
+                           class="rounded-lg border-slate-200 py-1.5 text-xs shadow-sm">
+                </label>
+                <label class="flex items-center gap-1 text-[11px] font-medium text-slate-500">To
+                    <input type="date" x-model="to" @change="apply()" :max="todayIso()" :min="from || null" aria-label="To date"
+                           class="rounded-lg border-slate-200 py-1.5 text-xs shadow-sm">
+                </label>
             </div>
         </template>
 
@@ -224,11 +230,15 @@
             Compare
         </label>
 
-        <a :href="exportHref()" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50">
+        {{-- No href while the period is invalid: the links never go out with from=&to=. --}}
+        <a :href="exportHref()" :aria-disabled="!exportHref()"
+           class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+           :class="exportHref() ? '' : 'pointer-events-none opacity-40'">
             CSV
         </a>
-        <a :href="clientReportHref()" target="_blank"
-           class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-700">
+        <a :href="clientReportHref()" target="_blank" :aria-disabled="!clientReportHref()"
+           class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-700"
+           :class="clientReportHref() ? '' : 'pointer-events-none opacity-40'">
             Report
         </a>
     </div>
@@ -250,6 +260,12 @@
     </div>
 @else
 <div>
+    {{-- Why the period did not load. The cards are blanked alongside it. --}}
+    <div x-show="error" x-cloak role="alert"
+         class="mb-4 flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
+        <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" /></svg>
+        <span x-text="error"></span>
+    </div>
 
     {{-- =================== OVERVIEW =================== --}}
     {{-- The screen that answers "how is the business doing" without scrolling.
@@ -257,9 +273,12 @@
          summary, and a summary that hides its own numbers is not one. --}}
     <div x-show="view === 'overview'" x-cloak>
 
-        <div class="grid grid-cols-2 gap-4 lg:grid-cols-3 2xl:grid-cols-5">
+        {{-- Five cards: 3 + 2 on a six-column grid (no empty slot), one row on very wide screens. --}}
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6 2xl:grid-cols-5">
             @foreach ($heroCards as $key => $c)
-                @include('dashboard.partials.card', ['key' => $key, 'm' => $c])
+                <div class="flex {{ $loop->index < 3 ? 'lg:col-span-2' : 'lg:col-span-3' }} {{ $loop->last ? 'sm:col-span-2' : '' }} 2xl:col-span-1">
+                    @include('dashboard.partials.card', ['key' => $key, 'm' => $c])
+                </div>
             @endforeach
         </div>
 
@@ -317,13 +336,6 @@
                 <h3 class="text-sm font-bold text-slate-700">Subscription mix</h3>
                 <div class="mt-4">
                     @include('dashboard.partials.status-mix', ['compact' => true])
-                </div>
-                {{-- Both pending states, named apart: "pending" alone was read
-                     as either one. --}}
-                <div class="mt-3 grid grid-cols-2 gap-2">
-                    @foreach (['awaiting_payment', 'pending_cancellation'] as $key)
-                        @include('dashboard.partials.stat-chip', ['key' => $key, 'm' => $stateChips[$key]])
-                    @endforeach
                 </div>
             </div>
         </div>
@@ -387,13 +399,13 @@
                              :class="r.reliable ? '' : 'opacity-50'"
                              :title="r.reliable ? '' : `Only ${r.eligible} subscriptions old enough to judge — too few to act on`">
                             <span class="w-28 shrink-0 truncate text-xs font-medium text-slate-600">
-                                <span x-text="r.segment" :title="segmentSourcesTitle(r)"></span>
+                                <span x-text="segmentName(r.segment)" :title="segmentSourcesTitle(r)"></span>
                                 <span x-show="! r.reliable" class="ml-1 text-[10px] font-semibold text-amber-700">n too small</span>
                             </span>
                             <span class="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
                                 <span class="block h-full rounded-full"
                                       :class="r.reliable ? 'bg-linear-to-r from-sky-400 to-indigo-500' : 'bg-slate-300'"
-                                      :style="`width: ${repeatBarWidth(r.repeat_pct)}`"></span>
+                                      :style="`width: ${(r.reliable ? repeatBarWidth(r.repeat_pct) : '0%')}`"></span>
                             </span>
                             <span class="w-10 shrink-0 text-right text-xs font-semibold tabular-nums"
                                   :class="r.reliable ? 'text-slate-700' : 'text-slate-400'"
@@ -428,6 +440,100 @@
         @endforeach
     </div>
 
+    {{-- On Hold split by why: paused by hand, or paused by WooCommerce because a
+         renewal payment is due. The two always add up to On Hold; each opens
+         the list of the people behind it. --}}
+    <div class="mt-3 print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm">
+        <div class="flex flex-wrap items-start justify-between gap-3 p-5">
+            <div>
+                <h3 class="text-sm font-bold text-slate-700">
+                    On Hold by reason <span class="font-medium text-slate-400">· <span x-text="periodEndNote()"></span></span>
+                </h3>
+                <p class="mt-1 text-xs text-slate-500">
+                    Payment pending = WooCommerce paused it because a renewal payment was due.
+                    Paused manually = the customer or an admin paused it. Click a number to see who.
+                </p>
+            </div>
+            <button type="button" @click="showOnHold('all')"
+                    class="no-print shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50">
+                <span x-text="onHold.open ? 'Hide list' : `View all ${value('on_hold')}`"></span>
+            </button>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 px-5">
+            @foreach (['manual' => ['Paused manually', 'on_hold_manual', 'bg-sky-500', 'text-sky-700', 'ring-sky-500'], 'payment_due' => ['Payment pending', 'on_hold_payment_due', 'bg-amber-500', 'text-amber-700', 'ring-amber-500']] as $reason => [$label, $metric, $dot, $text, $ring])
+                <button type="button" @click="showOnHold('{{ $reason }}')"
+                        class="rounded-xl border border-slate-200/70 px-4 py-3 text-left transition hover:border-slate-300 hover:bg-slate-50"
+                        :class="onHold.open && onHold.filter === '{{ $reason }}' ? 'ring-2 {{ $ring }}' : ''">
+                    <span class="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                        <span class="h-2 w-2 rounded-full {{ $dot }}"></span>{{ $label }}
+                    </span>
+                    <span class="mt-1 block text-2xl font-bold tabular-nums {{ $text }}" x-text="value('{{ $metric }}')"></span>
+                </button>
+            @endforeach
+        </div>
+
+        <div class="mx-5 mb-5 mt-3 flex h-2 overflow-hidden rounded-full bg-slate-100">
+            <div class="bg-sky-500" :style="`width: ${onHoldShare('on_hold_manual')}`"></div>
+            <div class="bg-amber-500" :style="`width: ${onHoldShare('on_hold_payment_due')}`"></div>
+        </div>
+
+        <div x-show="onHold.open" x-cloak class="border-t border-slate-100">
+            <div class="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+                <div class="flex gap-1 text-xs">
+                    @foreach (['all' => 'All', 'manual' => 'Paused manually', 'payment_due' => 'Payment pending'] as $f => $fl)
+                        <button type="button" @click="onHold.filter = '{{ $f }}'"
+                                class="rounded-full px-3 py-1 font-medium transition"
+                                :class="onHold.filter === '{{ $f }}' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'">{{ $fl }}</button>
+                    @endforeach
+                </div>
+                <a :href="onHoldExportHref()"
+                   class="no-print inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50">
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
+                    Export CSV
+                </a>
+            </div>
+
+            <p x-show="onHold.loading" x-cloak class="px-5 pb-5 text-sm text-slate-500">Loading…</p>
+            <p x-show="onHold.error" x-cloak class="mx-5 mb-5 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700" x-text="onHold.error"></p>
+            <p x-show="onHold.loaded && !onHold.loading && !onHoldRows().length" x-cloak class="px-5 pb-5 text-sm text-slate-400">Nobody in this group.</p>
+
+            <div class="overflow-x-auto" x-show="onHold.loaded && onHoldRows().length" x-cloak>
+                <table class="min-w-full text-sm">
+                    <thead class="bg-slate-50/70 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <tr>
+                            <th class="px-5 py-2.5">Subscription</th>
+                            <th class="px-5 py-2.5">Customer</th>
+                            <th class="px-5 py-2.5">Reason</th>
+                            <th class="px-5 py-2.5">On hold since</th>
+                            <th class="px-5 py-2.5 text-right">Days</th>
+                            <th class="px-5 py-2.5">Last payment</th>
+                            <th class="px-5 py-2.5 text-right">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        <template x-for="r in onHoldRows()" :key="r.id">
+                            <tr class="hover:bg-slate-50/60">
+                                <td class="px-5 py-2.5 font-mono text-xs text-slate-600" x-text="`#${r.id}`"></td>
+                                <td class="px-5 py-2.5 text-slate-700" x-text="r.customer ?? '—'"></td>
+                                <td class="px-5 py-2.5 whitespace-nowrap">
+                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                                          :class="r.reason === 'manual' ? 'bg-sky-50 text-sky-700 ring-1 ring-sky-500/20' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-500/20'"
+                                          x-text="onHoldReasonLabel(r.reason)"></span>
+                                    <span x-show="r.reason_from === 'estimate'" class="ml-1 text-[10px] text-slate-400" title="No WooCommerce note: worked out from the orders">est.</span>
+                                </td>
+                                <td class="px-5 py-2.5 text-slate-600" x-text="r.on_hold_since ?? '—'"></td>
+                                <td class="px-5 py-2.5 text-right tabular-nums text-slate-700" x-text="r.days_on_hold ?? '—'"></td>
+                                <td class="px-5 py-2.5 text-slate-600" x-text="r.last_payment ?? 'never'"></td>
+                                <td class="px-5 py-2.5 text-right tabular-nums text-slate-700" x-text="r.amount === null ? '—' : money(r.amount) + (r.plan ? ` / ${r.plan}` : '')"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     {{-- The growth engine. The cards above are one period; this is the shape of
          the whole year, and it is the only place the book's size is visible as
          a movement rather than a number. --}}
@@ -438,7 +544,8 @@
         </h3>
         <p class="mt-1 text-xs text-slate-500">
             Sign-ups above the line, subscribers lost below it, and the size of the book at each month's end.
-            When the pink bar is longer than the teal one, the book shrank that month.
+            The line is the real book size: it also moves when subscriptions go on hold or come back, which the bars
+            do not show, so a month can lose subscribers even when the teal bar is longer.
         </p>
         <div class="mt-4 h-72"><canvas x-ref="growthCanvas"></canvas></div>
         <p x-show="partialMonthLabel()" x-cloak class="mt-2 text-xs text-amber-700">
@@ -465,6 +572,138 @@
         </p>
     </div>
 
+    {{-- The cancellation form (07-export-cancellation-form.sql): why people
+         cancelled in this period, and what the retention discount did. --}}
+    <div class="mt-3 print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm">
+        <div class="flex flex-wrap items-start justify-between gap-3 p-5">
+            <div>
+                <h3 class="text-sm font-bold text-slate-700">
+                    Cancellation reasons <span class="font-medium text-slate-400">· <span x-text="periodLabel"></span></span>
+                </h3>
+                <p class="mt-1 text-xs text-slate-500">
+                    From the cancellation form, by the date it was sent. Click a reason to see who gave it.
+                </p>
+            </div>
+            <div class="no-print flex shrink-0 gap-2">
+                <button type="button" @click="toggleCancelReason('all')" x-show="cs().rows.length"
+                        class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                        x-text="cancelSurvey.open ? 'Hide list' : `View all ${cs().rows.length}`"></button>
+                <a :href="cancelSurveyExportHref()" x-show="cs().rows.length"
+                   class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50">
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
+                    Export CSV
+                </a>
+            </div>
+        </div>
+
+        <p x-show="cancelSurvey.loading && !cancelSurvey.loaded" x-cloak class="px-5 pb-5 text-sm text-slate-500">Loading…</p>
+        <p x-show="cancelSurvey.error" x-cloak class="mx-5 mb-5 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700" x-text="cancelSurvey.error"></p>
+        <p x-show="cancelSurvey.loaded && !cs().rows.length" x-cloak class="px-5 pb-5 text-sm text-slate-400">
+            No cancellation forms in this period. If you expected some, export
+            <span class="font-mono">07-export-cancellation-form.sql</span> and upload it on the Upload page.
+        </p>
+
+        <div x-show="cs().rows.length" x-cloak class="grid grid-cols-1 gap-5 px-5 pb-5 lg:grid-cols-5">
+            {{-- Reasons --}}
+            <div class="lg:col-span-3">
+                <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Why they cancelled <span class="normal-case font-medium" x-text="`· ${cs().surveys} forms`"></span>
+                </p>
+                <div class="space-y-1.5">
+                    <template x-for="r in cs().reasons" :key="r.reason ?? 'none'">
+                        <button type="button" @click="toggleCancelReason(r.reason)"
+                                class="group block w-full rounded-lg px-2 py-1 text-left transition hover:bg-slate-50"
+                                :class="cancelSurvey.open && cancelSurvey.filter === r.reason ? 'bg-rose-50' : ''">
+                            <div class="flex items-baseline justify-between gap-3 text-xs">
+                                <span class="font-medium text-slate-700" x-text="r.label"></span>
+                                <span class="tabular-nums text-slate-500"><span class="font-bold text-slate-800" x-text="r.count"></span> · <span x-text="`${r.share}%`"></span></span>
+                            </div>
+                            <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                                <div class="h-full rounded-full bg-rose-400" :style="`width: ${cancelReasonWidth(r)}`"></div>
+                            </div>
+                        </button>
+                    </template>
+                </div>
+            </div>
+
+            {{-- Retention offer + how they felt --}}
+            <div class="space-y-3 lg:col-span-2">
+                <button type="button" @click="toggleCancelReason('retention')"
+                        class="block w-full rounded-xl border border-emerald-200/70 bg-emerald-50/50 p-4 text-left transition hover:border-emerald-300"
+                        :class="cancelSurvey.open && cancelSurvey.filter === 'retention' ? 'ring-2 ring-emerald-500' : ''">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Retention discount</p>
+                    <p class="mt-1 text-sm text-slate-700">
+                        <span class="text-2xl font-bold text-emerald-700" x-text="cs().retention.accepted ?? 0"></span>
+                        accepted · <span class="font-semibold" x-text="cs().retention.declined ?? 0"></span> declined
+                    </p>
+                    <p class="mt-1 text-xs text-slate-600">
+                        <span class="font-semibold" x-text="cs().retention.spent ?? 0"></span> used it on a paid renewal ·
+                        <span class="font-semibold" x-text="cs().retention.stayed ?? 0"></span> still subscribed ·
+                        <span class="font-semibold" x-text="cs().retention.cancelled_anyway ?? 0"></span> cancelled anyway
+                    </p>
+                    <p x-show="cs().offers_without_survey > 0" class="mt-1 text-[10px] text-slate-400"
+                       x-text="`incl. ${cs().offers_without_survey} who accepted with no form on record`"></p>
+                </button>
+
+                <div class="grid grid-cols-2 gap-3 text-xs">
+                    <div class="rounded-xl border border-slate-200/70 p-3">
+                        <p class="mb-1.5 font-semibold uppercase tracking-wider text-slate-400">Satisfaction</p>
+                        <template x-for="[k, v] in Object.entries(cs().satisfaction ?? {})" :key="k">
+                            <div class="flex justify-between gap-2" x-show="v > 0">
+                                <span class="text-slate-600" x-text="pretty(k)"></span><span class="font-semibold tabular-nums text-slate-800" x-text="v"></span>
+                            </div>
+                        </template>
+                    </div>
+                    <div class="rounded-xl border border-slate-200/70 p-3">
+                        <p class="mb-1.5 font-semibold uppercase tracking-wider text-slate-400">Would return</p>
+                        <template x-for="[k, v] in Object.entries(cs().would_return ?? {})" :key="k">
+                            <div class="flex justify-between gap-2" x-show="v > 0">
+                                <span class="text-slate-600" x-text="pretty(k)"></span><span class="font-semibold tabular-nums text-slate-800" x-text="v"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div x-show="cancelSurvey.open && cs().rows.length" x-cloak class="overflow-x-auto border-t border-slate-100">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-50/70 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <tr>
+                        <th class="px-5 py-2.5">Sent</th>
+                        <th class="px-5 py-2.5">Subscription</th>
+                        <th class="px-5 py-2.5">Customer</th>
+                        <th class="px-5 py-2.5">Reason</th>
+                        <th class="hidden px-5 py-2.5 xl:table-cell">Satisfaction</th>
+                        <th class="hidden px-5 py-2.5 xl:table-cell">Return?</th>
+                        <th class="px-5 py-2.5">Discount</th>
+                        <th class="px-5 py-2.5">Status now</th>
+                        <th class="px-5 py-2.5">Feedback</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    <template x-for="(r, i) in cancelSurveyRows()" :key="`${r.survey_id ?? 'sub'}-${r.subscription_id}-${i}`">
+                        <tr class="align-top hover:bg-slate-50/60">
+                            <td class="whitespace-nowrap px-5 py-2.5 text-slate-600" x-text="r.submitted_at ?? '—'"></td>
+                            <td class="px-5 py-2.5 font-mono text-xs text-slate-600" x-text="r.subscription_id ? `#${r.subscription_id}` : '—'"></td>
+                            <td class="px-5 py-2.5 text-slate-700" x-text="r.customer ?? '—'"></td>
+                            <td class="whitespace-nowrap px-5 py-2.5 text-slate-700" x-text="r.reason_label"></td>
+                            <td class="hidden whitespace-nowrap px-5 py-2.5 text-slate-600 xl:table-cell" x-text="pretty(r.satisfaction)"></td>
+                            <td class="hidden px-5 py-2.5 text-slate-600 xl:table-cell" x-text="pretty(r.would_return)"></td>
+                            <td class="whitespace-nowrap px-5 py-2.5">
+                                <span x-show="r.retention_accepted" class="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-500/20"
+                                      x-text="(r.retention_percent ? `${Math.round(r.retention_percent)}% · ` : '') + (r.retention_spent ? 'used' : 'not used yet')"></span>
+                                <span x-show="!r.retention_accepted" class="text-xs text-slate-400">declined</span>
+                            </td>
+                            <td class="px-5 py-2.5 text-slate-600" x-text="pretty(r.subscription_status)"></td>
+                            <td class="max-w-xs px-5 py-2.5 text-xs text-slate-500" x-text="r.feedback ?? ''"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     {{-- On-hold subscriptions that stopped paying are invisible to churn: churn
          counts terminal statuses only, and nothing promotes a stalled hold. --}}
     <div x-show="onHoldDormant() > 0" x-cloak
@@ -478,7 +717,7 @@
 
     {{-- Drill-down: the actual rows behind "Subscribers Lost", so the number is
          checkable against WooCommerce rather than taken on trust. --}}
-    <div class="mt-3 print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm" x-show="lost.open" x-cloak>
+    <div class="mt-3 scroll-mt-24 print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm" x-show="lost.open" x-cloak x-ref="lostPanel">
         <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 p-5">
             <div>
                 <h3 class="text-sm font-bold text-slate-700">
@@ -487,6 +726,11 @@
                 <p class="mt-1 text-xs text-slate-500">
                     Every subscription whose end date falls inside this period, whenever it signed up. These are the rows
                     the churn rate counts — the ID matches the subscription id in WooCommerce.
+                    <span x-show="lostSummary().plan_switches > 0" x-cloak>
+                        The <span class="font-semibold" x-text="lostSummary().plan_switches"></span> marked
+                        <span class="font-semibold text-sky-700">not churn</span> started a new subscription within 14 days
+                        and are listed last; they are not in Subscribers Lost.
+                    </span>
                 </p>
             </div>
             <a :href="lostExportHref()"
@@ -551,29 +795,33 @@
                             <tr>
                                 <th class="px-5 py-2.5">Subscription</th>
                                 <th class="px-5 py-2.5">Customer</th>
-                                <th class="px-5 py-2.5">Signed up</th>
+                                <th class="hidden px-5 py-2.5 xl:table-cell">Signed up</th>
                                 <th class="px-5 py-2.5">Ended</th>
                                 <th class="px-5 py-2.5 text-right">Tenure</th>
-                                <th class="px-5 py-2.5 text-right">Paid orders</th>
+                                <th class="hidden px-5 py-2.5 text-right xl:table-cell">Paid orders</th>
                                 <th class="px-5 py-2.5 text-right">Spend</th>
                                 <th class="px-5 py-2.5 text-right">Came back</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
                             <template x-for="r in lost.rows" :key="r.id">
-                                <tr class="transition hover:bg-slate-50/60">
+                                <tr class="transition hover:bg-slate-50/60" :class="r.plan_switch ? 'opacity-60' : ''">
                                     <td class="whitespace-nowrap px-5 py-2.5">
                                         <span class="font-mono text-xs font-semibold text-slate-700" x-text="`#${r.id}`"></span>
+                                        {{-- Restarted within 14 days: listed, not counted as churn. --}}
+                                        <span x-show="r.plan_switch"
+                                              class="ml-1.5 rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700"
+                                              title="Started a new subscription within 14 days of this one ending: a plan switch, not counted as churn">not churn</span>
                                         {{-- Joined and left inside the same window: in the churn
                                              numerator, but never in the base it is divided by. --}}
                                         <span x-show="r.joined_in_period"
                                               class="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">new this period</span>
                                     </td>
                                     <td class="max-w-[220px] truncate px-5 py-2.5 text-slate-600" x-text="r.customer || '—'"></td>
-                                    <td class="whitespace-nowrap px-5 py-2.5 text-slate-500" x-text="shortDate(r.created)"></td>
+                                    <td class="hidden whitespace-nowrap px-5 py-2.5 text-slate-500 xl:table-cell" x-text="shortDate(r.created)"></td>
                                     <td class="whitespace-nowrap px-5 py-2.5 text-slate-500" x-text="shortDate(r.ended)"></td>
                                     <td class="px-5 py-2.5 text-right tabular-nums text-slate-700" x-text="`${r.tenure_days}d`"></td>
-                                    <td class="px-5 py-2.5 text-right tabular-nums"
+                                    <td class="hidden px-5 py-2.5 text-right tabular-nums xl:table-cell"
                                         :class="r.completed_orders === 0 ? 'font-semibold text-rose-600' : 'text-slate-600'"
                                         x-text="r.completed_orders"></td>
                                     <td class="px-5 py-2.5 text-right font-semibold tabular-nums text-slate-900" x-text="money(r.spend)"></td>
@@ -617,7 +865,7 @@
         @endforeach
     </div>
 
-    <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+    <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         @foreach ($retentionChips as $key => $c)
             @include('dashboard.partials.stat-chip', ['key' => $key, 'm' => $c])
         @endforeach
@@ -627,11 +875,15 @@
     <p class="mt-3 text-xs text-slate-500">
         Churn · Real = <span class="font-bold text-slate-700" x-text="value('churned_net_of_failed')"></span> real losses
         (<span x-text="value('churned_in_period')"></span> lost, less
-        <span x-text="value('failed_signups')"></span> that never ordered)
+        <span x-text="value('failed_signups')"></span> that never paid)
         ÷ <span class="font-bold text-slate-700" x-text="value('churn_base')"></span>
         (<span x-text="value('active_at_period_start')"></span> active when
         <span class="font-semibold text-slate-600" x-text="periodLabel"></span> opened
         + <span x-text="value('new_subscribers')"></span> who joined during it).
+        <span x-show="(metrics.plan_switches_in_period ?? 0) > 0" x-cloak>
+            <span x-text="value('plan_switches_in_period')"></span> more ended but started a new subscription within 14 days:
+            plan switches, not churn.
+        </span>
     </p>
 
     {{-- Tenure at churn: the same leavers as the churn rate above, split by how
@@ -756,7 +1008,8 @@
                         </th>
                         <th class="px-5 py-2.5 text-right">Active at end</th>
                         <th class="px-5 py-2.5 text-right">Net</th>
-                        <th class="px-5 py-2.5 text-right" title="Churned ÷ (active at start + new) × 100">Churn rate</th>
+                        <th class="px-5 py-2.5 text-right" title="Gross churn = everyone who ended ÷ (active at start + new) × 100, including sign-ups that never paid">Churn · Gross</th>
+                        <th class="px-5 py-2.5 text-right" title="Real churn = (ended − never paid) ÷ (active at start + new) × 100. The headline rate.">Churn · Real</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
@@ -778,6 +1031,7 @@
                             <td class="px-5 py-2.5 text-right tabular-nums"
                                 :class="row.active_end - row.active_start < 0 ? 'text-rose-600' : 'text-emerald-600'"
                                 x-text="netChangeLabel(row)"></td>
+                            <td class="px-5 py-2.5 text-right tabular-nums text-slate-500" x-text="churnRateLabel(row.churn_rate_gross)"></td>
                             <td class="px-5 py-2.5">
                                 <div class="flex items-center justify-end gap-2">
                                     <span class="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
@@ -847,10 +1101,10 @@
                         <th class="px-5 py-2.5 text-right">Subscriptions</th>
                         <th class="px-5 py-2.5 text-right">Never paid</th>
                         <th class="px-5 py-2.5 text-right">Still active</th>
-                        <th class="px-5 py-2.5 text-right">Revenue</th>
+                        <th class="hidden px-5 py-2.5 text-right xl:table-cell">Revenue</th>
                         <th class="px-5 py-2.5 text-right">LTV / sub</th>
                         <th class="px-5 py-2.5" title="Reached a 2nd payment ÷ subscriptions whose 2nd payment was due by now. Ones not yet due are left out rather than counted as failures.">
-                            Reached 2nd payment <span class="font-normal normal-case text-slate-300">· 95% range · n eligible</span>
+                            Reached 2nd payment <span class="hidden font-normal normal-case text-slate-300 2xl:inline">· 95% range</span> <span class="font-normal normal-case text-slate-300">· n</span>
                         </th>
                     </tr>
                 </thead>
@@ -858,7 +1112,7 @@
                     <template x-for="r in segments.rows" :key="r.segment">
                         <tr class="transition hover:bg-slate-50/60">
                             <td class="max-w-[220px] truncate px-5 py-2.5 font-medium text-slate-700">
-                                <span x-text="r.segment"
+                                <span x-text="segmentName(r.segment)"
                                       :title="[segmentSourcesTitle(r), r.rollup ? `${r.rollup} segments with fewer than 5 subscriptions each folded in` : ''].filter(Boolean).join(' · ')"></span>
                                 <span x-show="r.rollup" class="ml-1 text-[11px] font-normal text-slate-400"
                                       x-text="`· ${r.rollup} smaller`"></span>
@@ -872,13 +1126,13 @@
                                 :class="r.never_paid_pct >= 25 ? 'font-semibold text-rose-600' : 'text-slate-500'"
                                 x-text="`${r.never_paid_pct}%`"></td>
                             <td class="px-5 py-2.5 text-right tabular-nums text-emerald-600" x-text="r.still_active"></td>
-                            <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="money(r.revenue)"></td>
+                            <td class="hidden px-5 py-2.5 text-right tabular-nums text-slate-600 xl:table-cell" x-text="money(r.revenue)"></td>
                             <td class="px-5 py-2.5 text-right font-bold tabular-nums text-slate-900" x-text="money(r.ltv)"></td>
                             <td class="px-5 py-2.5">
                                 <div class="flex items-center justify-end gap-2">
-                                    <span class="h-1.5 w-20 overflow-hidden rounded-full bg-slate-100">
+                                    <span class="h-1.5 w-12 overflow-hidden rounded-full bg-slate-100">
                                         <span class="block h-full rounded-full bg-linear-to-r from-sky-400 to-indigo-500"
-                                              :style="`width: ${repeatBarWidth(r.repeat_pct)}`"></span>
+                                              :style="`width: ${(r.reliable ? repeatBarWidth(r.repeat_pct) : '0%')}`"></span>
                                     </span>
                                     <span class="w-12 text-right font-semibold tabular-nums"
                                           :class="r.reliable ? 'text-slate-700' : 'text-slate-400'"
@@ -886,9 +1140,10 @@
                                     {{-- The interval is the point: at n = 13 a
                                          69% rate spans 44%-94%, which is not a
                                          finding. --}}
-                                    <span class="w-24 text-right text-[11px] tabular-nums text-slate-400"
+                                    <span class="hidden w-24 text-right text-[11px] tabular-nums text-slate-400 2xl:inline"
                                           x-text="r.repeat_pct === null ? '' : `${r.repeat_low}–${r.repeat_high}`"></span>
-                                    <span class="w-16 text-right text-[11px] tabular-nums text-slate-400"
+                                    <span class="w-12 text-right text-[11px] tabular-nums text-slate-400"
+                                          :title="r.repeat_pct === null ? '' : `95% range ${r.repeat_low}–${r.repeat_high}`"
                                           x-text="`n=${r.eligible}`"></span>
                                 </div>
                             </td>
@@ -1038,13 +1293,13 @@
     <div x-show="view === 'customers'" x-cloak>
     {{-- ============ Customers ============ --}}
     @include('dashboard.partials.section-heading', ['title' => 'Customers', 'id' => 'customers', 'bar' => 'from-indigo-400 to-violet-500'])
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
         @foreach ($customerCards as $key => $c)
             @include('dashboard.partials.card', ['key' => $key, 'm' => $c])
         @endforeach
     </div>
 
-    <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+    <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
         @foreach ($customerChips as $key => $c)
             @include('dashboard.partials.stat-chip', ['key' => $key, 'm' => $c])
         @endforeach
@@ -1052,7 +1307,7 @@
 
     {{-- Top customers (lifetime), full width --}}
     <div class="mt-4 print-block overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm" x-show="topCustomers.length" x-cloak>
-        <h3 class="text-sm font-bold text-slate-700">Top Customers <span class="font-medium text-slate-400">· completed spend in <span x-text="periodLabel"></span></span></h3>
+        <h3 class="text-sm font-bold text-slate-700">Top Customers <span class="font-medium text-slate-400">· paid spend in <span x-text="periodLabel"></span></span></h3>
         <div class="mt-3 overflow-x-auto">
             <table class="min-w-full text-sm">
                 <thead class="text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -1104,24 +1359,27 @@
                         class="rounded-lg px-2.5 py-1 text-xs font-semibold transition"
                         :class="audience.key === key ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'"
                         x-text="({
-                            cross_sell: 'Cross-sell',
+                            cross_sell: 'Combo upgrade',
                             win_back: 'Win-back',
                             never_subscribed: 'Never subscribed',
-                            partial_churn: 'Still subscribed',
+                            partial_churn: 'Kept one plan',
                         })[key] ?? key"></button>
             </template>
+            <span x-show="audience.loading" x-cloak class="ml-2 self-center text-xs text-slate-400">loading…</span>
         </div>
 
-        <div class="max-h-96 overflow-y-auto">
+        {{-- No inner scroll box: it trapped the page's scroll. The page shows the
+             warmest 50; the CSV has everyone. --}}
+        <div class="overflow-x-auto transition-opacity" :class="audience.loading ? 'opacity-40' : ''">
             <table class="min-w-full text-sm">
-                <thead class="sticky top-0 bg-slate-50/95 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 backdrop-blur">
+                <thead class="bg-slate-50/95 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
                     <tr>
                         <th class="px-5 py-2.5">Customer</th>
                         <th class="px-5 py-2.5 text-right">Subs</th>
                         <th class="px-5 py-2.5">Detail</th>
-                        <th class="px-5 py-2.5">Cycle</th>
-                        <th class="px-5 py-2.5 text-right">Payments</th>
-                        <th class="px-5 py-2.5 text-right">Lifetime spend</th>
+                        <th class="px-4 py-2.5">Cycle</th>
+                        <th class="px-4 py-2.5 text-right">Payments</th>
+                        <th class="whitespace-nowrap px-5 py-2.5 text-right">Lifetime spend</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
@@ -1131,9 +1389,9 @@
                             <td class="px-5 py-2.5 text-right tabular-nums text-slate-500"
                                 :title="(r.subscription_ids || []).map((id) => `#${id}`).join(', ')"
                                 x-text="r.subscriptions || '—'"></td>
-                            <td class="max-w-[240px] truncate px-5 py-2.5 text-slate-500" x-text="r.detail || '—'"></td>
-                            <td class="whitespace-nowrap px-5 py-2.5 text-xs text-slate-400" x-text="r.cycle || '—'"></td>
-                            <td class="px-5 py-2.5 text-right tabular-nums text-slate-600" x-text="r.payments"></td>
+                            <td class="max-w-[180px] truncate px-4 py-2.5 text-slate-500" :title="r.detail" x-text="r.detail || '—'"></td>
+                            <td class="whitespace-nowrap px-4 py-2.5 text-xs text-slate-400" x-text="r.cycle || '—'"></td>
+                            <td class="px-4 py-2.5 text-right tabular-nums text-slate-600" x-text="r.payments"></td>
                             <td class="px-5 py-2.5 text-right font-semibold tabular-nums text-slate-900" x-text="money(r.value)"></td>
                         </tr>
                     </template>
@@ -1145,7 +1403,7 @@
         </div>
         <p x-show="audience.total > audience.rows.length" x-cloak
            class="border-t border-slate-100 bg-amber-50 px-5 py-2.5 text-xs text-amber-800">
-            Showing the first <span class="font-semibold" x-text="audience.rows.length"></span> of
+            Showing the warmest <span class="font-semibold" x-text="audience.rows.length"></span> of
             <span class="font-semibold" x-text="audience.total"></span>. Export the CSV for the full list.
         </p>
     </div>
@@ -1326,13 +1584,13 @@
 
     {{-- ============ Orders ============ --}}
     @include('dashboard.partials.section-heading', ['title' => 'Orders', 'id' => 'orders', 'bar' => 'from-sky-400 to-blue-500'])
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
         @foreach ($orderCards as $key => $c)
             @include('dashboard.partials.card', ['key' => $key, 'm' => $c])
         @endforeach
     </div>
 
-    <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+    <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
         @foreach ($orderChips as $key => $c)
             @include('dashboard.partials.stat-chip', ['key' => $key, 'm' => $c])
         @endforeach
@@ -1343,10 +1601,10 @@
         <div class="flex flex-wrap items-center justify-between gap-3">
             <h3 class="flex items-center gap-2 text-sm font-semibold text-slate-700">
                 <svg class="h-4 w-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" /></svg>
-                “New (not completed)” breakdown
+                “Not paid” breakdown
             </h3>
             <label class="inline-flex cursor-pointer items-center gap-2.5 text-sm font-medium text-slate-600">
-                <span>Strict <span class="text-slate-400">(pending + processing)</span></span>
+                <span>Strict <span class="text-slate-400">(pending only)</span></span>
                 <span class="relative">
                     <input type="checkbox" x-model="strict" @change="apply()" class="peer sr-only">
                     <span class="block h-5 w-9 rounded-full bg-slate-300 transition peer-checked:bg-amber-500"></span>
@@ -1376,7 +1634,7 @@
         @endforeach
     </div>
 
-    <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+    <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         @foreach ($totalChips as $key => $c)
             @include('dashboard.partials.stat-chip', ['key' => $key, 'm' => $c])
         @endforeach
@@ -1417,7 +1675,7 @@
                 <span class="text-xs text-slate-500">
                     Contribution after COGS
                     <span class="text-slate-400" x-show="metrics.gross_margin_pct === null">
-                        · set <code class="font-mono">METRICS_GROSS_MARGIN_PCT</code> to enable
+                        · needs a gross margin, not set yet
                     </span>
                 </span>
                 <span class="text-sm font-semibold tabular-nums text-slate-500" x-text="moneyOrDash(metrics.contribution)"></span>
@@ -1511,7 +1769,7 @@
                         <th class="px-5 py-2.5">Cohort</th>
                         <th class="px-5 py-2.5 text-right">Signed up</th>
                         <th class="px-5 py-2.5 text-right" title="Status active as of the data timestamp: the same rule as Active Subscribers on the Overview">Still active</th>
-                        <th class="px-5 py-2.5 text-right">Retained</th>
+                        <th class="px-5 py-2.5 text-right" title="Still active ÷ signed up. On hold does not count here, unlike the survival heatmap below.">Active %</th>
                         <th class="px-5 py-2.5 text-right">Median tenure</th>
                         <th class="px-5 py-2.5 text-right">Total earned</th>
                         <th class="px-5 py-2.5">Value / subscriber</th>
@@ -1554,10 +1812,11 @@
         <div class="flex flex-wrap items-baseline justify-between gap-3">
             <div>
                 <h2 class="text-base font-bold tracking-tight text-slate-900"
-                    x-text="(cohortMode === 'survival' ? 'Cohort Retention' : 'Cohort Order Activity') + ' · to ' + cohortsEndLabel()"></h2>
+                    x-text="(cohortMode === 'survival' ? 'Cohort Survival' : 'Cohort Order Activity') + ' · to ' + cohortsEndLabel()"></h2>
                 <p class="mt-0.5 text-xs text-slate-500" x-show="cohortMode === 'survival'">
                     Of subscribers who signed up each month, the % not yet cancelled or expired at the end of month N.
-                    A subscriber on hold has not left, so the curve can only stay flat or fall.
+                    On hold counts as not ended here, so this is higher than the <span class="font-semibold">Active %</span>
+                    in the lifetime value table, which counts active subscribers only.
                 </p>
                 <p class="mt-0.5 text-xs text-slate-500" x-show="cohortMode === 'activity'" x-cloak>
                     Of subscribers who signed up each month, the % with a completed order in month N. Not retention:
@@ -1565,7 +1824,7 @@
                 </p>
             </div>
             <div class="no-print flex overflow-hidden rounded-lg border border-slate-200">
-                <template x-for="opt in [{ value: 'survival', label: 'Retention' }, { value: 'activity', label: 'Order activity' }]" :key="opt.value">
+                <template x-for="opt in [{ value: 'survival', label: 'Survival' }, { value: 'activity', label: 'Order activity' }]" :key="opt.value">
                     <button type="button" @click="cohortMode = opt.value"
                             class="px-2.5 py-1.5 text-xs font-medium transition"
                             :class="cohortMode === opt.value ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'"
@@ -1613,6 +1872,14 @@
          rather than the CSV, and it answers a different question from the
          order metrics it used to sit under. --}}
     <div x-show="view === 'email'" x-cloak>
+    {{-- Why these do not match Acquisition: two different attribution models. --}}
+    <p class="mb-4 rounded-xl border border-sky-200/70 bg-sky-50/60 px-4 py-3 text-xs leading-relaxed text-sky-900">
+        These figures are <span class="font-semibold">Klaviyo's own attribution</span>: any order or subscription event
+        within Klaviyo's attribution window after someone opened or clicked an email, including automatic renewals.
+        <span class="font-semibold">Acquisition</span> credits each new subscription to one source only, the last
+        click before sign-up (UTM). So email shows more subscriptions here than in Acquisition, and the two are not
+        meant to add up.
+    </p>
     {{-- ============ Email Performance (Klaviyo) ============ --}}
     @php
         // [key, label, icon, gradient, tooltip, revenue-subtext-key]
@@ -1633,8 +1900,8 @@
             <h2 class="text-sm font-bold uppercase tracking-wider text-slate-600">Email Performance · Klaviyo</h2>
         </div>
         <div class="flex items-center gap-3 text-xs text-slate-400">
-            <span x-show="klaviyo.syncedAt" x-cloak>Synced <span x-text="klaviyo.syncedAt ? new Date(klaviyo.syncedAt).toLocaleString() : ''"></span></span>
-            <span x-show="klaviyo.revision" x-cloak>· rev&nbsp;<span x-text="klaviyo.revision"></span></span>
+            <span x-show="klaviyo.syncedAt" x-cloak>Synced <span x-text="klaviyo.syncedAt ? new Date(klaviyo.syncedAt).toLocaleString('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' UK' : ''"></span></span>
+
             <button @click="refreshKlaviyo()" :disabled="klaviyoRefreshing"
                     class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">
                 <svg class="h-3.5 w-3.5" :class="klaviyoRefreshing ? 'animate-spin' : ''" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>

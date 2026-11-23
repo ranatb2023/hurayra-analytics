@@ -148,11 +148,15 @@ class SubscriberHistoryTest extends TestCase
         $this->assertSame(0, $rows['2026-03']['churned']);
         $this->assertSame(4, $rows['2026-03']['active_end']);    // + S3
 
-        $this->assertSame(1, $rows['2026-04']['churned']);       // S3
-        $this->assertSame(25.0, $rows['2026-04']['churn_rate']); // 1 of 4
+        $this->assertSame(1, $rows['2026-04']['churned']);             // S3
+        $this->assertSame(25.0, $rows['2026-04']['churn_rate_gross']); // 1 of 4
 
-        $this->assertSame(1, $rows['2026-06']['churned']);       // S2
-        $this->assertSame(50.0, $rows['2026-06']['churn_rate']); // 1 of 2
+        $this->assertSame(1, $rows['2026-06']['churned']);             // S2
+        $this->assertSame(50.0, $rows['2026-06']['churn_rate_gross']); // 1 of 2
+
+        // S2 and S3 never paid: failed sign-ups, so real churn is nil.
+        $this->assertSame(1, $rows['2026-06']['failed_signups']);
+        $this->assertSame(0.0, $rows['2026-06']['churn_rate']);
 
         $this->assertSame(1, $rows['2026-07']['active_start']);  // S1 only
         $this->assertSame(0, $rows['2026-07']['churned']);

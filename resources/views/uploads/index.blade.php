@@ -71,13 +71,21 @@
                 Export with <span class="font-mono text-slate-500">05-export-status-history.sql</span> and upload it here too.
                 It gives past months real On Hold, Pending Cancellation and Pending counts, which the orders file cannot.
             </p>
+            <h2 class="mt-4 text-xs font-bold uppercase tracking-wider text-slate-500">Cancellation form (optional)</h2>
+            <code class="mt-2 block wrap-break-word text-xs leading-relaxed text-slate-600">survey_id, subscription_id, reason, retention_used, …</code>
+            <p class="mt-2 text-xs text-slate-400">
+                Export with <span class="font-mono text-slate-500">07-export-cancellation-form.sql</span> and upload it here.
+                It fills the Cancellation reasons panel on the Subscribers tab: why people cancelled and who took the retention discount.
+            </p>
         </div>
     </div>
 
     {{-- ===== Import history ===== --}}
     <div class="lg:col-span-3">
         <h2 class="text-xl font-bold tracking-tight text-slate-900">Import history</h2>
-        <div class="mt-4 overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm">
+        {{-- Scrolls sideways when the column is narrower than the table, so
+             Skipped, When and Delete stay reachable. --}}
+        <div class="mt-4 overflow-x-auto rounded-2xl border border-slate-200/70 bg-white shadow-sm">
             <table class="min-w-full divide-y divide-slate-200 text-sm">
                 <thead class="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
                     <tr>

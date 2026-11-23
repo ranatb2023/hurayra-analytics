@@ -24,6 +24,10 @@ Route::get('/api/metrics/renewals/export', [MetricsController::class, 'upcomingR
 Route::get('/api/metrics/cohort-value', [MetricsController::class, 'cohortValue'])->name('metrics.cohort_value');
 Route::get('/api/metrics/history', [MetricsController::class, 'history'])->name('metrics.history');
 Route::get('/api/metrics/churn', [MetricsController::class, 'churn'])->name('metrics.churn');
+Route::get('/api/metrics/cancellation-surveys', [MetricsController::class, 'cancellationSurveys'])->name('metrics.cancellation_surveys');
+Route::get('/api/metrics/cancellation-surveys/export', [MetricsController::class, 'cancellationSurveysExport'])->name('metrics.cancellation_surveys.export');
+Route::get('/api/metrics/on-hold', [MetricsController::class, 'onHoldSubscriptions'])->name('metrics.on_hold');
+Route::get('/api/metrics/on-hold/export', [MetricsController::class, 'onHoldSubscriptionsExport'])->name('metrics.on_hold.export');
 Route::get('/api/metrics/churned-subscriptions', [MetricsController::class, 'churnedSubscriptions'])->name('metrics.churned_subscriptions');
 Route::get('/api/metrics/churned-subscriptions/export', [MetricsController::class, 'churnedSubscriptionsExport'])->name('metrics.churned_subscriptions.export');
 Route::get('/api/metrics/one-time-to-subscription', [MetricsController::class, 'oneTimeToSubscription'])->name('metrics.one_time_to_subscription');

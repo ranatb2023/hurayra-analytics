@@ -26,13 +26,13 @@
         </div>
     @endif
 
-    <div class="overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm">
+    <div class="overflow-x-auto rounded-2xl border border-slate-200/70 bg-white shadow-sm">
         <table class="min-w-full text-sm">
             <thead class="bg-slate-50/70 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
                 <tr>
                     <th class="w-20 px-4 py-2.5">Priority</th>
                     <th class="w-44 px-4 py-2.5">Channel</th>
-                    <th class="px-4 py-2.5">Sources (comma-separated)</th>
+                    <th class="min-w-[24rem] px-4 py-2.5">Sources (comma-separated)</th>
                     <th class="w-52 px-4 py-2.5">Mediums <span class="font-normal normal-case">(blank = any)</span></th>
                     <th class="w-36 px-4 py-2.5"></th>
                 </tr>
@@ -46,7 +46,7 @@
                                 @method('PUT')
                                 <div class="w-20 px-4 py-2"><input name="priority" type="number" value="{{ $rule->priority }}" class="{{ $input }}"></div>
                                 <div class="w-44 px-4 py-2"><input name="channel" value="{{ $rule->channel }}" class="{{ $input }}"></div>
-                                <div class="flex-1 px-4 py-2"><input name="sources" value="{{ $rule->sources }}" class="{{ $input }}"></div>
+                                <div class="min-w-[24rem] flex-1 px-4 py-2"><input name="sources" value="{{ $rule->sources }}" title="{{ $rule->sources }}" aria-label="Sources for {{ $rule->channel }}" class="{{ $input }}"></div>
                                 <div class="w-52 px-4 py-2"><input name="mediums" value="{{ $rule->mediums }}" class="{{ $input }}"></div>
                                 <div class="flex w-36 items-center gap-1.5 px-4 py-2">
                                     <button class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700">Save</button>
@@ -67,7 +67,7 @@
                             @csrf
                             <div class="w-20 px-4 py-2"><input name="priority" type="number" value="{{ ($rules->max('priority') ?? 0) + 10 }}" class="{{ $input }}"></div>
                             <div class="w-44 px-4 py-2"><input name="channel" placeholder="e.g. TikTok" class="{{ $input }}"></div>
-                            <div class="flex-1 px-4 py-2"><input name="sources" placeholder="tiktok.com, tiktok" class="{{ $input }}"></div>
+                            <div class="min-w-[24rem] flex-1 px-4 py-2"><input name="sources" placeholder="tiktok.com, tiktok" aria-label="Sources" class="{{ $input }}"></div>
                             <div class="w-52 px-4 py-2"><input name="mediums" placeholder="any" class="{{ $input }}"></div>
                             <div class="w-36 px-4 py-2">
                                 <button class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500">Add rule</button>

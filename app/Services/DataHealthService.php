@@ -102,7 +102,7 @@ class DataHealthService
             ->all();
 
         return $this->make('zero_completed', '£0 completed orders',
-            'Completed orders with a total of £0 or less. They are not counted as one-time purchases (P1-10) but do count as completed orders.',
+            'Completed orders with a total of £0 or less. They are not counted as one-time purchases but do count as completed orders.',
             ['id' => 'Order', 'relationship' => 'Relationship', 'customer' => 'Customer', 'subscription' => 'Subscription', 'coupon' => 'Coupon', 'created' => 'Created (UK)'],
             $rows);
     }
@@ -147,7 +147,7 @@ class DataHealthService
         usort($rows, fn ($a, $z) => $z['subscriptions'] <=> $a['subscriptions']);
 
         return $this->make('duplicate_active', 'Multiple active subscriptions to one product',
-            'Customers with two or more active subscriptions to the same product: often a duplicate checkout, sometimes deliberate (two dogs).',
+            'Customers with two or more active subscriptions to the same product: often a duplicate checkout, sometimes deliberate (two cats).',
             ['customer' => 'Customer', 'product' => 'Product', 'subscriptions' => 'Active subs', 'ids' => 'Subscription IDs'],
             $rows);
     }
@@ -166,6 +166,11 @@ class DataHealthService
         $asOf = $this->freshness->asOf();
         $timelines = $this->metrics->statusTimelines();
         $estimated = $this->metrics->holdStarts();
+        $reasons = $this->metrics->holdReasons(Clock::gmt($asOf));
+        $labels = [
+            StatusHistoryImportService::HOLD_MANUAL => 'Paused manually',
+            StatusHistoryImportService::HOLD_PAYMENT_DUE => 'Payment pending',
+        ];
 
         $rows = [];
         $buckets = array_fill_keys(array_column(self::HOLD_AGE_BUCKETS, 0), 0);
@@ -197,6 +202,10 @@ class DataHealthService
                 'on_hold_since' => $this->ukTime($since),
                 'days' => $days,
                 'bucket' => $bucket,
+                // "(est.)" when worked out from the orders rather than read from the note.
+                'reason' => isset($reasons[$s->id])
+                    ? $labels[$reasons[$s->id]['reason']].($reasons[$s->id]['source'] === 'estimate' ? ' (est.)' : '')
+                    : '',
                 'dated_from' => isset($timelines[$s->id]) ? 'status history' : 'estimate',
             ];
         }
@@ -204,8 +213,8 @@ class DataHealthService
         usort($rows, fn ($a, $z) => $z['days'] <=> $a['days']);
 
         return $this->make('on_hold_age', 'On-hold subscriptions by age',
-            'How long each on-hold subscription has been on hold, as of the data timestamp. Dated from the status history where there is one, otherwise estimated as one billing cycle after the last payment.',
-            ['id' => 'Subscription', 'customer' => 'Customer', 'on_hold_since' => 'On hold since (UK)', 'days' => 'Days', 'bucket' => 'Bucket', 'dated_from' => 'Dated from'],
+            'How long each on-hold subscription has been on hold, as of the data timestamp, and why. Dated from the status history where there is one, otherwise estimated as one billing cycle after the last payment. Reason: "Payment pending" when WooCommerce paused it for a renewal payment due, "Paused manually" when the customer or an admin paused it; estimated from unpaid renewal orders where the history has no note.',
+            ['id' => 'Subscription', 'customer' => 'Customer', 'reason' => 'Reason', 'on_hold_since' => 'On hold since (UK)', 'days' => 'Days', 'bucket' => 'Bucket', 'dated_from' => 'Dated from'],
             $rows) + ['buckets' => $buckets];
     }
 

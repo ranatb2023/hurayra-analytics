@@ -72,6 +72,13 @@ class Record extends Model
      */
     public const ORDER_STATUSES = ['completed', 'cancelled', 'failed', 'refunded', 'pending', 'processing', 'on-hold'];
 
+    /**
+     * Orders whose money has been taken: completed, and processing (paid,
+     * not yet fulfilled). Revenue, customers, "has paid" checks and renewal
+     * success all read this, so they agree with each other.
+     */
+    public const PAID_STATUSES = ['completed', 'processing'];
+
     /** Statuses that are never business data, whatever else appears. */
     public const EXCLUDED_ORDER_STATUSES = ['trash', 'draft', 'checkout-draft', 'auto-draft'];
 

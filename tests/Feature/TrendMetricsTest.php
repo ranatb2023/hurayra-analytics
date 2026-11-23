@@ -89,14 +89,15 @@ class TrendMetricsTest extends TestCase
         $this->assertSame(25.0, $this->series('average_order_value')['2026-03']);
     }
 
-    public function test_renewal_success_rate_is_completed_renewals_over_all_renewals(): void
+    public function test_renewal_success_rate_is_paid_renewals_over_paid_and_failed(): void
     {
         $this->order(1, '2026-03-04 00:00:00', ['order_relationship' => 'renewal']);
-        $this->order(2, '2026-03-05 00:00:00', ['order_relationship' => 'renewal']);
+        $this->order(2, '2026-03-05 00:00:00', ['order_relationship' => 'renewal', 'status' => 'processing']);
         $this->order(3, '2026-03-06 00:00:00', ['order_relationship' => 'renewal', 'status' => 'failed']);
         $this->order(4, '2026-03-07 00:00:00', ['order_relationship' => 'renewal', 'status' => 'pending']);
 
-        $this->assertSame(50.0, $this->series('renewal_success_rate')['2026-03']);
+        // 2 paid (completed + processing) of 3 decided; pending is still awaiting payment.
+        $this->assertSame(66.7, $this->series('renewal_success_rate')['2026-03']);
     }
 
     public function test_a_month_with_no_renewals_is_a_gap_not_a_total_failure(): void

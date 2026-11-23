@@ -19,13 +19,17 @@
         ['Awaiting Payment', $m['awaiting_payment'] ?? 0],
         ['Pending Cancellation', $m['pending_cancellation']],
         ['On Hold', $m['on_hold']],
+        ['On Hold · Paused Manually', $m['on_hold_manual'] ?? 0],
+        ['On Hold · Payment Pending', $m['on_hold_payment_due'] ?? 0],
         ['Cancelled · No Purchase', $m['cancelled_without_purchase']],
         ['Cancelled · Purchased', $m['cancelled_with_purchase']],
     ];
     $pct = fn ($v) => $v === null ? '—' : $v.'%';
+    // Real churn leads, as on the dashboard: leavers who had paid at least
+    // once. Gross (including never-paid sign-ups) is shown below, labelled.
     $retentionRows = [
-        ['Monthly Churn Rate', $pct($m['monthly_churn_rate'] ?? null)],
-        ['Subscribers Lost', number_format($m['churned_in_period'] ?? 0)],
+        ['Monthly Churn Rate', $pct($m['monthly_churn_rate_net'] ?? null)],
+        ['Subscribers Lost', number_format($m['churned_net_of_failed'] ?? 0)],
         ['Active at Period Start', number_format($m['active_at_period_start'] ?? 0)],
         ['Churn Base (active at start + new)', number_format($m['churn_base'] ?? 0)],
         ['Renewal Success', $pct($m['renewal_success_rate'] ?? null)],
@@ -35,14 +39,14 @@
         ['Subscription Purchases', $m['subscription_purchases']],
         ['Renewal Purchases', $m['renewal_purchases']],
         ['Completed', $m['completed']],
-        ['New (not completed)', $m['new_not_completed']],
+        ['Not Paid', $m['new_not_completed']],
     ];
 @endphp
 <body class="h-full text-slate-800 antialiased">
 
     {{-- Toolbar (screen only) --}}
     <div class="no-print sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-6 py-3">
-        <span class="text-sm font-medium text-slate-500">Client report preview</span>
+        <span class="text-sm font-medium text-slate-500">Client report</span>
         <div class="flex items-center gap-2">
             <a href="{{ route('dashboard') }}" class="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Back to dashboard</a>
             <button onclick="window.print()" class="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500">Download / Save as PDF</button>
@@ -60,7 +64,7 @@
             </div>
             <div class="text-right text-sm">
                 <p class="font-semibold text-slate-800">{{ $period->label }}</p>
-                <p class="text-slate-400">Generated {{ $generatedAt->format('M j, Y') }}</p>
+                <p class="text-slate-400">Generated {{ \App\Support\Clock::now()->format('j M Y') }}</p>
             </div>
         </div>
 
@@ -88,7 +92,8 @@
 
         <p class="mb-6 text-[11px] text-slate-400">
             Active Subscribers counts status <span class="font-mono">active</span> as of
-            {{ $period->end->subDay()->format('M j, Y') }}. Subscriptions on hold by that date and Pending
+            {{ \Carbon\CarbonImmutable::parse($m['snapshot_at'])->format('j M Y, H:i') }} UK time{{ ($m['snapshot_capped'] ?? false) ? ' (the latest data; the period runs on past it)' : '' }}.
+            Subscriptions on hold by that date and Pending
             Cancellation are not included; one that went on hold later still counts here.
         </p>
 
@@ -102,6 +107,14 @@
                 </div>
             @endforeach
         </div>
+        <p class="mb-1 text-[11px] text-slate-400">
+            Churn counts subscribers who had paid at least once and left in the period:
+            {{ number_format($m['churned_in_period'] ?? 0) }} ended in total ({{ $pct($m['monthly_churn_rate'] ?? null) }} gross),
+            of which {{ number_format($m['failed_signups'] ?? 0) }} never paid.
+            @if (($m['plan_switches_in_period'] ?? 0) > 0)
+                {{ number_format($m['plan_switches_in_period']) }} more restarted within {{ \App\Services\MetricsService::PLAN_SWITCH_DAYS }} days and are not counted as churn.
+            @endif
+        </p>
         <p class="mb-4 text-[11px] text-slate-400">
             Subscriber counts are taken from each subscription's sign-up and end dates, so a closed month keeps the
             figure it had at the time — a later cancellation does not remove anyone from it.
@@ -147,8 +160,8 @@
             @endforeach
         </div>
 
-        {{-- New (not completed) breakdown --}}
-        <h2 class="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">“New (not completed)” breakdown</h2>
+        {{-- Not paid breakdown --}}
+        <h2 class="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">“Not paid” breakdown</h2>
         <div class="rounded-xl border border-slate-200 p-4">
             <div class="flex flex-wrap gap-2">
                 @foreach (($m['not_completed_breakdown'] ?? []) as $status => $count)
@@ -213,10 +226,8 @@
             </p>
         @endif
 
-        <p class="mt-8 text-center text-[11px] text-slate-400">Hurayra Analytics · {{ $period->label }} · generated {{ $generatedAt->format('M j, Y g:i A') }}</p>
+        <p class="mt-8 text-center text-[11px] text-slate-400">Hurayra Analytics · {{ $period->label }} · generated {{ \App\Support\Clock::now()->format('j M Y, H:i') }} UK time</p>
     </div>
 
-    {{-- Auto-open the print/save dialog for a one-click download. --}}
-    <script>window.addEventListener('load', () => setTimeout(() => window.print(), 500));</script>
 </body>
 </html>

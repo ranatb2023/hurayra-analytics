@@ -69,8 +69,12 @@ class RetentionCustomerCohortTest extends TestCase
 
         $this->assertSame(5, $m['total_subscriptions']);
         $this->assertSame(40.0, $m['churn_rate']);                 // (1 cancelled + 1 expired) / 5
-        $this->assertSame(33.3, $m['renewal_success_rate']);       // 1 completed of 3 renewals
-        $this->assertSame(2, $m['failed_renewals']);               // failed + pending
+        // Success = paid / (paid + failed); pending is still awaiting payment.
+        $this->assertSame(50.0, $m['renewal_success_rate']);       // 1 paid of (1 paid + 1 failed)
+        $this->assertSame(1, $m['failed_renewals']);               // failed status only
+        $this->assertSame(1, $m['renewals_awaiting_payment']);     // pending
+        $this->assertSame(50.0, $m['revenue_at_risk_failed_renewals']);
+        $this->assertSame(50.0, $m['revenue_at_risk_pending_renewals']);
         $this->assertSame(100.0, $m['revenue_at_risk']);           // 50 failed + 50 pending
 
         $this->assertSame(

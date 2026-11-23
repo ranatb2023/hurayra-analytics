@@ -9,7 +9,8 @@ export default (config = {}) => ({
     granularity: 'month',
     year: config.defaultYear ?? new Date().getFullYear(),
     month: new Date().getMonth() + 1,
-    week: 1, // week-of-month index
+    // Week-of-month index: today's week, so W opens on the current week.
+    week: Math.min(Math.ceil(new Date().getDate() / 7), 5),
     from: '',
     to: '',
     compare: false,
@@ -71,6 +72,10 @@ export default (config = {}) => ({
     // The subscriptions behind the period's churn number, fetched on demand so
     // the dashboard does not pay for the list unless somebody opens it.
     lost: { open: false, loading: false, error: null, rows: [], total: 0, returned: 0, summary: {} },
+    // Cancellation form for the period: reasons, retention offer, rows.
+    cancelSurvey: { loaded: false, loading: false, error: null, data: null, filter: null, open: false },
+    // On-hold drill-down: who is paused at the period end, and why.
+    onHold: { open: false, loaded: false, loading: false, error: null, rows: [], filter: 'all', asOf: '' },
 
     // One-time buyers who later subscribed (lifetime, independent of the filter).
     upsell: { rows: [], summary: {}, total: 0 },
@@ -90,10 +95,10 @@ export default (config = {}) => ({
     currencyKeys: ['total_revenue', 'average_order_value', 'subscription_revenue', 'one_time_revenue',
         'revenue_at_risk', 'revenue_per_customer', 'mrr', 'arr', 'arpu',
         'gross_revenue', 'net_revenue', 'tax_collected', 'shipping_collected', 'refunded',
-        'net_revenue_after_refunds', 'contribution', 'revenue_at_risk_dormant', 'revenue_at_risk_failed_renewals'],
+        'net_revenue_after_refunds', 'contribution', 'revenue_at_risk_dormant', 'revenue_at_risk_failed_renewals', 'revenue_at_risk_pending_renewals'],
     percentKeys: ['churn_rate', 'monthly_churn_rate', 'monthly_churn_rate_net', 'monthly_churn_rate_adjusted', 'net_revenue_retention',
         'gross_revenue_retention', 'renewal_success_rate', 'repeat_rate', 'end_date_coverage',
-        'customer_churn_rate'],
+        'customer_churn_rate', 'churn_rate_gross'],
 
     init() {
         // React to filter changes without wiring each input by hand.
@@ -101,7 +106,15 @@ export default (config = {}) => ({
         // Month/year drive several granularities; clamp the week then refresh once.
         this.$watch('month', () => { this.clampWeek(); this.apply(); });
         this.$watch('year', () => { this.clampWeek(); this.apply(); });
-        this.$watch('view', (v) => this.renderChartsFor(v));
+        this.$watch('view', (v) => {
+            this.renderChartsFor(v);
+            // Keep ?view= in the address bar so refresh and shared links land
+            // on the same view, and start each view at its top.
+            const url = new URL(window.location.href);
+            url.searchParams.set('view', v);
+            window.history.replaceState(null, '', url);
+            window.scrollTo({ top: 0 });
+        });
         // refresh() also loads every table that follows the period filter.
         this.refresh();
         // Live work lists, "as of today" whatever the period — fetch once.
@@ -115,24 +128,57 @@ export default (config = {}) => ({
     weekOptions() {
         const daysInMonth = new Date(this.year, this.month, 0).getDate();
         const count = Math.ceil(daysInMonth / 7);
-        const short = new Date(this.year, this.month - 1, 1).toLocaleString(undefined, { month: 'short' });
+        const short = new Date(this.year, this.month - 1, 1).toLocaleString('en-GB', { month: 'short' });
         return Array.from({ length: count }, (_, i) => {
             const start = i * 7 + 1;
             const end = Math.min((i + 1) * 7, daysInMonth);
-            return { value: i + 1, label: `Week ${i + 1} · ${short} ${start}–${end}` };
+            return { value: i + 1, label: `Wk ${i + 1} · ${start}–${end} ${short}` };
         });
     },
 
     clampWeek() {
         const max = this.weekOptions().length;
         if (this.week > max) this.week = max;
+        // Moving to the current year can leave a month that has not happened yet.
+        const months = this.monthOptions().length;
+        if (this.month > months) this.month = months;
+    },
+
+    /** Today as Y-m-d (local), the latest date a range may end on. */
+    todayIso() {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    },
+
+    /**
+     * Why the selected period cannot be shown, or null when it can. Checked
+     * before anything is fetched so the cards never keep the last period's
+     * numbers under a period that did not load.
+     */
+    periodProblem() {
+        const now = new Date();
+        if (this.granularity === 'custom') {
+            if (!this.from || !this.to) return 'Pick both a From and a To date.';
+            if (this.from > this.to) return '"To" must be on or after "From".';
+            if (this.from > this.todayIso()) return 'That range has not started yet, so there is no data for it.';
+            return null;
+        }
+        const start = this.granularity === 'year'
+            ? new Date(this.year, 0, 1)
+            : this.granularity === 'week'
+                ? new Date(this.year, this.month - 1, (this.week - 1) * 7 + 1)
+                : new Date(this.year, this.month - 1, 1);
+        return start > now ? 'That period has not started yet, so there is no data for it.' : null;
     },
 
     // --- option sources for the custom dropdowns ---
+    /** Months of the selected year, never past the current month: no data exists there. */
     monthOptions() {
-        return Array.from({ length: 12 }, (_, i) => ({
+        const now = new Date();
+        const last = this.year >= now.getFullYear() ? now.getMonth() + 1 : 12;
+        return Array.from({ length: last }, (_, i) => ({
             value: i + 1,
-            label: new Date(2000, i, 1).toLocaleString(undefined, { month: 'long' }),
+            label: new Date(2000, i, 1).toLocaleString('en-GB', { month: 'long' }),
         }));
     },
 
@@ -173,30 +219,43 @@ export default (config = {}) => ({
         this.refresh();
     },
 
+    /** Blank every period figure, so a period that did not load never shows the last one's. */
+    clearPeriod() {
+        this.metrics = {};
+        this.comparison = null;
+        this.periodLabel = '';
+        this.period = null;
+    },
+
     async refresh() {
-        if (this.granularity === 'custom' && (!this.from || !this.to)) {
-            this.error = 'Pick both a from and to date.';
+        const problem = this.periodProblem();
+        if (problem) {
+            this.error = problem;
+            this.clearPeriod();
             return;
         }
         this.loading = true;
         this.error = null;
-        try {
-            await Promise.all([this.fetchSummary(), this.fetchTrend()]);
-        } catch (e) {
-            this.error = e.message ?? 'Something went wrong loading metrics.';
-        } finally {
-            this.loading = false;
-        }
-        this.fetchKlaviyo(); // independent source; don't block the core metrics
 
-        // The tables follow the filter too. Each fails quietly on its own so
-        // one slow panel cannot blank the cards.
+        // Everything that follows the filter starts at once rather than
+        // waiting on the cards. Each table fails quietly on its own so one
+        // slow panel cannot blank the cards.
+        this.fetchKlaviyo();
         this.fetchSegments();
         this.fetchCohorts();
         this.fetchCohortValue();
         this.fetchChurn();
         this.fetchTopCustomers();
         this.fetchUpsell();
+
+        try {
+            await Promise.all([this.fetchSummary(), this.fetchTrend()]);
+        } catch (e) {
+            this.error = e.message ?? 'Something went wrong loading metrics.';
+            this.clearPeriod();
+        } finally {
+            this.loading = false;
+        }
     },
 
     /** The filter bar's period alone (no compare/strict), for the table endpoints. */
@@ -211,7 +270,11 @@ export default (config = {}) => ({
         const res = await fetch(`/api/metrics/summary?${this.filterParams().toString()}`, {
             headers: { Accept: 'application/json' },
         });
-        if (!res.ok) throw new Error('Failed to load metrics.');
+        if (!res.ok) {
+            // The API answers bad input with a JSON 422 that says what is wrong.
+            const body = await res.json().catch(() => null);
+            throw new Error(body?.message ?? `Could not load metrics (HTTP ${res.status}).`);
+        }
         const data = await res.json();
         this.metrics = data.metrics;
         this.comparison = data.comparison;
@@ -222,6 +285,9 @@ export default (config = {}) => ({
         // count. Refetched only if the panel is still open.
         this.lost = { ...this.lost, rows: [], total: 0, returned: 0, summary: {}, error: null };
         if (this.lost.open) this.fetchLost();
+        this.onHold = { ...this.onHold, rows: [], loaded: false, error: null };
+        if (this.onHold.open) this.fetchOnHold();
+        this.fetchCancelSurvey();
         this.$nextTick(() => { this.renderRevenueDonut(); });
     },
 
@@ -343,11 +409,19 @@ export default (config = {}) => ({
         } catch (_) { /* non-critical */ }
     },
 
-    /** On Hold is a live state; dormant ones are the part that will never churn. */
+    /**
+     * On Hold split by why it is paused (the two always add up to On Hold),
+     * plus the dormant ones: the part that will never churn on its own.
+     */
     onHoldNote() {
-        const d = this.metrics.on_hold_dormant ?? 0;
-        if (!d) return 'live state, as of the period end';
-        return `${d} dormant 1.5 cycles+ — stopped paying, in Churn · Adjusted`;
+        const m = this.metrics ?? {};
+        const parts = [];
+        if (m.on_hold_manual !== undefined) {
+            parts.push(`${this.value('on_hold_manual')} paused manually`, `${this.value('on_hold_payment_due')} payment pending`);
+        }
+        const d = m.on_hold_dormant ?? 0;
+        if (d) parts.push(`${d} dormant 1.5 cycles+`);
+        return parts.length ? parts.join(' · ') : 'live state, as of the period end';
     },
 
     /** ARPU's own denominator, so ARPU × it visibly equals MRR. */
@@ -361,7 +435,34 @@ export default (config = {}) => ({
     revenueAtRiskNote() {
         const m = this.metrics ?? {};
         if (m.revenue_at_risk_dormant === undefined) return '';
-        return `${this.money(m.revenue_at_risk_dormant)}/mo dormant + ${this.money(m.revenue_at_risk_failed_renewals)} failed renewals`;
+        return `${this.money(m.revenue_at_risk_dormant)}/mo dormant + ${this.money(m.revenue_at_risk_failed_renewals)} failed`
+            + ` + ${this.money(m.revenue_at_risk_pending_renewals ?? 0)} awaiting payment`;
+    },
+
+    /**
+     * A segment value as a person reads it. Ad platforms pass a numeric
+     * campaign id as utm_campaign; shown raw it reads as a bug.
+     */
+    segmentName(v) {
+        const s = String(v ?? '');
+        return /^\d{10,}$/.test(s) ? `Ad campaign …${s.slice(-6)}` : s;
+    },
+
+    /**
+     * NRR over a year is the opening book a year later, and most monthly
+     * subscribers turn over inside a year, so it reads tiny. Say so.
+     */
+    nrrNote() {
+        return this.granularity === 'year' || this.granularity === 'custom'
+            ? 'of the opening book, over the whole period: compare monthly'
+            : 'of the opening book';
+    },
+
+    /** Failed and awaiting payment, from the same rows as the count. */
+    failedRenewalsNote() {
+        const m = this.metrics ?? {};
+        if (m.failed_renewals === undefined) return '';
+        return `${this.money(m.revenue_at_risk_failed_renewals ?? 0)} · ${m.renewals_awaiting_payment ?? 0} more awaiting payment`;
     },
 
     onHoldDormant() {
@@ -439,7 +540,8 @@ export default (config = {}) => ({
     /** Bar width for the inline churn-rate meter, capped at a 25% full scale. */
     churnBarWidth(rate) {
         if (!rate) return '0%';
-        return `${Math.min(100, (rate / 25) * 100).toFixed(1)}%`;
+        const peak = Math.max(...(this.churn.rows ?? []).map((r) => r.churn_rate ?? 0), 1);
+        return `${Math.min(100, (rate / peak) * 100).toFixed(1)}%`;
     },
 
     netChangeLabel(row) {
@@ -470,7 +572,11 @@ export default (config = {}) => ({
     // --- drill-down: the individual subscriptions counted as churn ---
     async toggleLost() {
         this.lost.open = !this.lost.open;
-        if (this.lost.open && this.lost.rows.length === 0) await this.fetchLost();
+        if (!this.lost.open) return;
+        // The list sits further down the page: bring it into view so the
+        // click visibly does something, then fill it.
+        this.$nextTick(() => this.$refs.lostPanel?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+        if (this.lost.rows.length === 0) await this.fetchLost();
     },
 
     async fetchLost() {
@@ -496,6 +602,110 @@ export default (config = {}) => ({
         } finally {
             this.lost.loading = false;
         }
+    },
+
+    // --- cancellation form: why people cancelled, and the retention offer ---
+    async fetchCancelSurvey() {
+        this.cancelSurvey.loading = true;
+        this.cancelSurvey.error = null;
+        try {
+            const res = await fetch(`/api/metrics/cancellation-surveys?${this.filterParams().toString()}`, {
+                headers: { Accept: 'application/json' },
+            });
+            if (!res.ok) throw new Error(`Could not load the cancellation form (HTTP ${res.status}).`);
+            this.cancelSurvey.data = await res.json();
+            this.cancelSurvey.loaded = true;
+        } catch (e) {
+            this.cancelSurvey.error = e.message;
+        } finally {
+            this.cancelSurvey.loading = false;
+        }
+    },
+
+    cs() {
+        return this.cancelSurvey.data ?? { surveys: 0, reasons: [], satisfaction: {}, would_return: {}, retention: {}, rows: [] };
+    },
+
+    /** Bar width for a reason, scaled to the most common one. */
+    cancelReasonWidth(row) {
+        const peak = Math.max(...this.cs().reasons.map((r) => r.count), 0);
+        return peak ? `${Math.max(2, (row.count / peak) * 100).toFixed(1)}%` : '0%';
+    },
+
+    /** Click a reason to list who gave it; click it again to clear. */
+    toggleCancelReason(reason) {
+        if (this.cancelSurvey.open && this.cancelSurvey.filter === reason) {
+            this.cancelSurvey.open = false;
+            return;
+        }
+        this.cancelSurvey.filter = reason;
+        this.cancelSurvey.open = true;
+    },
+
+    cancelSurveyRows() {
+        const f = this.cancelSurvey.filter;
+        const rows = this.cs().rows ?? [];
+        if (f === 'all') return rows;
+        if (f === 'retention') return rows.filter((r) => r.retention_accepted);
+        return rows.filter((r) => (r.reason ?? null) === f);
+    },
+
+    cancelSurveyExportHref() {
+        return `/api/metrics/cancellation-surveys/export?${this.filterParams().toString()}`;
+    },
+
+    pretty(slug) {
+        if (!slug) return '—';
+        const s = String(slug).replace(/[-_]/g, ' ');
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    },
+
+    // --- drill-down: who is on hold, and why ---
+    /** Open the list on a reason; clicking the reason already shown closes it. */
+    async showOnHold(filter) {
+        if (this.onHold.open && this.onHold.filter === filter) {
+            this.onHold.open = false;
+            return;
+        }
+        this.onHold.filter = filter;
+        this.onHold.open = true;
+        if (!this.onHold.loaded) await this.fetchOnHold();
+    },
+
+    async fetchOnHold() {
+        this.onHold.loading = true;
+        this.onHold.error = null;
+        try {
+            const res = await fetch(`/api/metrics/on-hold?${this.filterParams().toString()}`, {
+                headers: { Accept: 'application/json' },
+            });
+            if (!res.ok) throw new Error(`Could not load the list (HTTP ${res.status}).`);
+            const data = await res.json();
+            this.onHold = { ...this.onHold, rows: data.rows ?? [], asOf: data.as_of ?? '', loaded: true };
+        } catch (e) {
+            this.onHold.error = e.message;
+        } finally {
+            this.onHold.loading = false;
+        }
+    },
+
+    onHoldRows() {
+        const f = this.onHold.filter;
+        return f === 'all' ? this.onHold.rows : this.onHold.rows.filter((r) => r.reason === f);
+    },
+
+    onHoldReasonLabel(reason) {
+        return reason === 'manual' ? 'Paused manually' : 'Payment pending';
+    },
+
+    onHoldExportHref() {
+        return `/api/metrics/on-hold/export?${this.filterParams().toString()}`;
+    },
+
+    /** Share of On Hold in one reason, for the split bar. */
+    onHoldShare(key) {
+        const total = this.metrics?.on_hold ?? 0;
+        return total ? `${((this.metrics?.[key] ?? 0) / total) * 100}%` : '0%';
     },
 
     lostExportHref() {
@@ -552,7 +762,7 @@ export default (config = {}) => ({
     shortDate(value) {
         const d = this.gmtInstant(value);
         if (!d) return value ? String(value) : '—';
-        return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: '2-digit', timeZone: 'Europe/London' });
+        return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit', timeZone: 'Europe/London' });
     },
 
     // --- one-time -> subscription upsell list ---
@@ -622,13 +832,13 @@ export default (config = {}) => ({
     dateLabel(value) {
         const d = this.gmtInstant(value);
         if (!d) return value ? String(value) : '—';
-        return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Europe/London' });
+        return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Europe/London' });
     },
 
     daysLabel(days) {
         if (days === null || days === undefined) return '—';
         if (days === 0) return 'same day';
-        return `${new Intl.NumberFormat().format(days)} day${days === 1 ? '' : 's'}`;
+        return `${new Intl.NumberFormat('en-GB').format(days)} day${days === 1 ? '' : 's'}`;
     },
 
     subStatusClass(status) {
@@ -642,11 +852,54 @@ export default (config = {}) => ({
         }[status] ?? 'bg-slate-100 text-slate-600';
     },
 
+    /**
+     * The trend follows the selected period: it ends where the period ends.
+     * Month mode fetches 24 months (12 shown, 12 more for the year-earlier
+     * line), week mode 26 weeks (13 shown); a range is used as given. Year
+     * mode keeps every year, which is the point of a yearly trend.
+     *
+     * @returns {[string, string] | null} [from, to] as Y-m-d, inclusive
+     */
+    trendWindow() {
+        const pad = (n) => String(n).padStart(2, '0');
+        const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        if (this.granularity === 'month') {
+            return [iso(new Date(this.year, this.month - 24, 1)), iso(new Date(this.year, this.month, 0))];
+        }
+        if (this.granularity === 'week') {
+            const end = new Date(this.year, this.month - 1, Math.min(this.week * 7, new Date(this.year, this.month, 0).getDate()));
+            const start = new Date(end);
+            start.setDate(start.getDate() - 7 * 26 + 1);
+            return [iso(start), iso(end)];
+        }
+        if (this.granularity === 'custom' && this.from && this.to) return [this.from, this.to];
+        return null;
+    },
+
+    /** Buckets the chart shows; the rest of the window only feeds the year-earlier line. */
+    trendShown() {
+        return { month: 12, week: 13 }[this.granularity] ?? Infinity;
+    },
+
+    /** A bucket key as a person reads it: 2026-03 -> Mar 26, 2026-W10 -> Wk 10 '26. */
+    bucketLabel(key) {
+        const k = String(key);
+        if (/^\d{4}-\d{2}$/.test(k)) return this.cohortMonthLabel(k);
+        const w = k.match(/^(\d{4})-W(\d{2})$/);
+        if (w) return `Wk ${+w[2]} '${w[1].slice(2)}`;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(k)) {
+            const [y, m, d] = k.split('-');
+            return new Date(+y, +m - 1, +d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+        }
+        return k;
+    },
+
     async fetchTrend() {
         const p = new URLSearchParams({ metric: this.trendMetric, granularity: this.granularity });
-        if (this.granularity === 'custom' && this.from && this.to) {
-            p.set('from', this.from);
-            p.set('to', this.to);
+        const window = this.trendWindow();
+        if (window) {
+            p.set('from', window[0]);
+            p.set('to', window[1]);
         }
         if (this.trendBreakdown) p.set('breakdown', this.trendBreakdown);
         const res = await fetch(`/api/metrics/trend?${p.toString()}`, {
@@ -678,14 +931,14 @@ export default (config = {}) => ({
 
     /** Enough history for a year-on-year overlay to have anything to say. */
     canCompareYear() {
-        return (this.chartLabels ?? []).length > 12 && this.granularity !== 'custom';
+        return (this.chartLabels ?? []).length > 12 && this.granularity === 'month';
     },
 
     trendValueLabel(v, unit) {
         if (v === null || v === undefined) return '—';
         if (unit === 'currency') return this.money(v);
         if (unit === 'percent') return `${v}%`;
-        return new Intl.NumberFormat().format(v);
+        return new Intl.NumberFormat('en-GB').format(v);
     },
 
     /** The same, shortened: an axis has no room for £4,984.16 twelve times. */
@@ -713,9 +966,15 @@ export default (config = {}) => ({
         this.trendOther = data.other_segments ?? 0;
         this.chartLabels = data.labels ?? [];
 
+        // Only the buckets up to the period are shown; the earlier ones in the
+        // window are there for the year-earlier line.
+        const allLabels = data.labels ?? [];
+        const from = Math.max(0, allLabels.length - this.trendShown());
+        const shownKeys = allLabels.slice(from);
+
         // Which point is a bucket still filling up, so the last segment can be
         // drawn dashed instead of reading as a collapse.
-        const partialAt = (data.labels ?? []).indexOf(data.partial_bucket);
+        const partialAt = shownKeys.indexOf(data.partial_bucket);
         const partialSegment = partialAt >= 0
             ? { borderDash: (c) => (c.p1DataIndex === partialAt ? [5, 4] : undefined) }
             : {};
@@ -730,13 +989,13 @@ export default (config = {}) => ({
         this.chart = new window.Chart(ctx, {
             type: this.trendType,
             data: {
-                labels: data.labels,
+                labels: shownKeys.map((k) => this.bucketLabel(k)),
                 datasets: series.map((s, i) => {
                     const color = this.seriesColors[i % this.seriesColors.length];
 
                     return {
                         label: s.label,
-                        data: s.values,
+                        data: (s.values ?? []).slice(from),
                         borderColor: color,
                         backgroundColor: split ? color : 'rgba(212, 102, 129, 0.22)',
                         tension: 0.3,
@@ -750,7 +1009,7 @@ export default (config = {}) => ({
                         spanGaps: true,
                         segment: partialSegment,
                     };
-                }).concat(this.yoyDataset(data, split)),
+                }).concat(this.yoyDataset(data, split, from)),
             },
             options: {
                 responsive: true,
@@ -779,16 +1038,16 @@ export default (config = {}) => ({
      * query: the trend already spans all the data. Only meaningful unsplit —
      * six channels against six ghosts is unreadable.
      */
-    yoyDataset(data, split) {
-        if (!this.trendYoY || split || this.granularity === 'custom') return [];
+    yoyDataset(data, split, from = 0) {
+        if (!this.trendYoY || split || this.granularity !== 'month') return [];
 
         const values = data.values ?? [];
         if (values.length <= 12) return [];
 
-        const shifted = values.map((_, i) => (i >= 12 ? values[i - 12] : null));
+        const shifted = values.map((_, i) => (i >= 12 ? values[i - 12] : null)).slice(from);
 
         return [{
-            label: 'A year earlier',
+            label: 'Same month last year',
             data: shifted,
             borderColor: '#cbd5e1',
             backgroundColor: 'rgba(203, 213, 225, 0.25)',
@@ -816,7 +1075,7 @@ export default (config = {}) => ({
         if (this.percentKeys.includes(key)) {
             return `${v}%`;
         }
-        return new Intl.NumberFormat().format(v);
+        return new Intl.NumberFormat('en-GB').format(v);
     },
 
     /**
@@ -839,10 +1098,10 @@ export default (config = {}) => ({
 
         if (this.metrics.snapshot_capped) {
             const when = new Date(+y, +m - 1, +d, +hh, +mm);
-            return `as of ${when.toLocaleDateString(undefined, fmt)}, ${String(hh).padStart(2, '0')}:${mm}`;
+            return `as of ${when.toLocaleDateString('en-GB', fmt)}, ${String(hh).padStart(2, '0')}:${mm}`;
         }
 
-        return `as of ${new Date(+y, +m - 1, +d - 1).toLocaleDateString(undefined, fmt)}`;
+        return `as of ${new Date(+y, +m - 1, +d - 1).toLocaleDateString('en-GB', fmt)}`;
     },
 
     /**
@@ -853,7 +1112,7 @@ export default (config = {}) => ({
     dataEndsNote() {
         if (!this.metrics?.snapshot_capped || !this.metrics.snapshot_at) return '';
         const [y, m, d] = String(this.metrics.snapshot_at).split(' ')[0].split('-');
-        const when = new Date(+y, +m - 1, +d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+        const when = new Date(+y, +m - 1, +d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
         return `Data ends ${when}. Figures after this are not real zeros.`;
     },
 
@@ -1371,7 +1630,7 @@ export default (config = {}) => ({
         if (v === null || v === undefined) return '—';
         if (['revenue', 'sub_created_revenue', 'sub_renewal_revenue', 'flow_revenue', 'flow_sub_created_revenue', 'flow_sub_renewal_revenue'].includes(key)) return this.money(v);
         if (['delivery_rate', 'open_rate', 'click_rate', 'flow_delivery_rate', 'flow_open_rate', 'flow_click_rate'].includes(key)) return `${v}%`;
-        return new Intl.NumberFormat().format(v);
+        return new Intl.NumberFormat('en-GB').format(v);
     },
 
     /** The cells for the cohort grid's current view; null = not happened yet. */
@@ -1382,13 +1641,13 @@ export default (config = {}) => ({
     // --- cohort heatmap cell styling ---
     cohortStyle(pct) {
         const alpha = pct > 0 ? (pct / 100) * 0.82 + 0.08 : 0;
-        return `background-color: rgba(212,102,129,${alpha.toFixed(2)}); color: ${pct > 55 ? '#ffffff' : '#334155'};`;
+        return `background-color: rgba(212,102,129,${alpha.toFixed(2)}); color: ${pct > 75 ? '#ffffff' : '#334155'};`;
     },
 
     cohortMonthLabel(ym) {
         const [y, m] = String(ym).split('-');
         if (!y || !m) return String(ym);
-        return new Date(y, m - 1, 1).toLocaleString(undefined, { month: 'short', year: '2-digit' });
+        return new Date(y, m - 1, 1).toLocaleString('en-GB', { month: 'short', year: '2-digit' });
     },
 
     /** The month the 12-month history ends at (the selected period's month). */
@@ -1415,9 +1674,9 @@ export default (config = {}) => ({
         const m = this.metrics;
         if (!m || !Object.keys(m).length) return '';
         return `${this.periodLabel}: ${this.value('new_subscribers')} new subscribers, `
-            + `${this.value('churned_in_period')} churned (${this.value('monthly_churn_rate')} of `
-            + `${this.value('churn_base')} active at the start or joining), ${this.value('total_revenue')} revenue across `
-            + `${this.value('completed')} completed orders, ${this.value('unique_customers')} customers.`;
+            + `${this.value('churned_net_of_failed')} lost (real churn ${this.value('monthly_churn_rate_net')} of `
+            + `${this.value('churn_base')} active at the start or joining), ${this.value('total_revenue')} revenue from `
+            + `${this.value('unique_customers')} paying customers.`;
     },
 
     copySummary() {
@@ -1427,11 +1686,11 @@ export default (config = {}) => ({
     },
 
     exportHref() {
-        return `/api/metrics/export?${this.filterParams().toString()}`;
+        return this.periodProblem() ? null : `/api/metrics/export?${this.filterParams().toString()}`;
     },
 
     clientReportHref() {
-        return `/report/client?${this.filterParams().toString()}`;
+        return this.periodProblem() ? null : `/report/client?${this.filterParams().toString()}`;
     },
 
     change(key) {

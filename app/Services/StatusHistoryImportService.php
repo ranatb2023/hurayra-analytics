@@ -39,6 +39,11 @@ class StatusHistoryImportService
         'switched' => 'switched',
     ];
 
+    /** Why a subscription went on hold ({@see holdReason()}). */
+    public const HOLD_PAYMENT_DUE = 'payment_due';
+
+    public const HOLD_MANUAL = 'manual';
+
     private const CHUNK_SIZE = 500;
 
     private const MAX_ERROR_SAMPLES = 50;
@@ -120,7 +125,7 @@ class StatusHistoryImportService
     }
 
     /**
-     * @return array{import_id:?int, subscription_id:int, changed_at:string, from_status:string, to_status:string, created_at:Carbon, updated_at:Carbon}|null
+     * @return array{import_id:?int, subscription_id:int, changed_at:string, from_status:string, to_status:string, hold_reason:?string, created_at:Carbon, updated_at:Carbon}|null
      */
     public function normaliseRow(array $row, array $index, ?int $importId): ?array
     {
@@ -153,6 +158,7 @@ class StatusHistoryImportService
             'changed_at' => Carbon::parse($date)->toDateTimeString(),
             'from_status' => $from ?? '',
             'to_status' => $to,
+            'hold_reason' => $to === 'on-hold' ? $this->holdReason($get('hold_reason'), $get('note')) : null,
             'created_at' => $now,
             'updated_at' => $now,
         ];
@@ -177,6 +183,37 @@ class StatusHistoryImportService
         $to = $this->status($last[2]);
 
         return $to === null ? null : [$this->status($last[1]), $to];
+    }
+
+    /**
+     * Why a change to on-hold happened, or null when the row cannot say.
+     *
+     * WooCommerce prefixes the note when it pauses a subscription itself:
+     * "Subscription renewal payment due: Status changed from Active to On hold."
+     * Anything else that moves a subscription to on-hold (a bare status
+     * change from WP Admin, a bulk edit, the customer suspending from My
+     * Account) is a person pausing it, so it reads as manual. A file with an
+     * explicit `hold_reason` column wins; a file with neither stays null.
+     */
+    public function holdReason(string $explicit, string $note): ?string
+    {
+        $explicit = strtolower(trim($explicit));
+        if (in_array($explicit, [self::HOLD_PAYMENT_DUE, self::HOLD_MANUAL], true)) {
+            return $explicit;
+        }
+
+        $note = trim(strip_tags(html_entity_decode($note, ENT_QUOTES)));
+        if ($note === '') {
+            return null;
+        }
+
+        // The reason is whatever precedes the last "Status changed" sentence.
+        $cut = strripos($note, 'status changed from');
+        $prefix = strtolower($cut === false ? $note : substr($note, 0, $cut));
+
+        return preg_match('/payment|renewal order|unpaid/', $prefix) === 1
+            ? self::HOLD_PAYMENT_DUE
+            : self::HOLD_MANUAL;
     }
 
     /** A status name or slug as the slug `records.status` uses; null if unknown. */
@@ -218,7 +255,7 @@ class StatusHistoryImportService
         DB::table('subscription_status_changes')->upsert(
             $rows,
             ['subscription_id', 'changed_at', 'from_status', 'to_status'],
-            ['import_id', 'updated_at'],
+            ['import_id', 'hold_reason', 'updated_at'],
         );
 
         return count($rows);

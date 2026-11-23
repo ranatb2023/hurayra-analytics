@@ -60,7 +60,8 @@
                         @forelse (array_slice($s['rows'], 0, 200) as $row)
                             <tr class="{{ ($row['note'] ?? '') === 'mismatch' ? 'bg-rose-50/60' : '' }}">
                                 @foreach (array_keys($s['columns']) as $col)
-                                    <td class="whitespace-nowrap px-5 py-2 text-slate-600">{{ $row[$col] ?? '—' }}</td>
+                                    {{-- Money columns as money: "24.6" read as a count. --}}
+                                    <td class="whitespace-nowrap px-5 py-2 text-slate-600 {{ in_array($col, ['total', 'amount', 'value', 'spend'], true) ? 'text-right tabular-nums' : '' }}">{{ in_array($col, ['total', 'amount', 'value', 'spend'], true) && is_numeric($row[$col] ?? null) ? '£'.number_format((float) $row[$col], 2) : ($row[$col] ?? '—') }}</td>
                                 @endforeach
                             </tr>
                         @empty

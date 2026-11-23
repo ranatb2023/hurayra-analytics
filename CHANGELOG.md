@@ -5,6 +5,38 @@ All notable changes to Hurayra Analytics. One entry per audit task
 
 ## Unreleased
 
+### QA pass (2026-11-23)
+Definitions (agreed with the client):
+- **Paid = completed + processing** (`Record::PAID_STATUSES`): revenue, AOV, customers, "has paid", failed sign-ups, LTV and renewal success all use it. "New (not completed)" is now "Not paid" (strict = pending only).
+- **Failed renewals = `failed` status only.** Pending renewals are counted as "awaiting payment"; renewal success = paid ÷ (paid + failed). Count and £ value come from the same rows.
+- **Churn leads with Real everywhere** (dashboard, sentence, history table, client report). Adjusted = Real + newly dormant on-hold. History table shows Real and labelled Gross.
+- **Plan switches are not churn:** a subscription whose customer starts another within 14 days of it ending is left out of every churn count and flagged "not churn" on the Subscribers Lost list.
+- Failed first renewal excludes manual pauses and holds earlier than one billing cycle (less 3 days) after the first payment (46 → 26).
+
+Bugs:
+- API: bad period input (reversed or blank range, `year=abc`) is a JSON 422 on every `/api/*` route, not a 500 or an HTML 200. The dashboard shows the error, blanks the cards, and disables CSV/Report until the period is valid.
+- Future periods can't be selected; week mode opens on the current week; the view is kept in `?view=` and each view opens at its top; the Subscribers Lost card scrolls to its list.
+- Acquisition > Product reads the parent order's product (was all "(none)"); Cycle splits by interval (monthly / every 2 months / every 6 weeks).
+- Client report: no auto-print, "as of" is the real (capped) snapshot, Real churn headline.
+- AOV divided paid revenue by completed orders only.
+- CSV export: readable labels, Previous / Change % always filled, bookkeeping keys dropped.
+- All 14 dashboard requests start together instead of waiting on the cards; the trend follows the selected period (12 months / 13 weeks to its end).
+
+Copy and layout: UK dates throughout, chart axes "Nov 26", no dev text (env var name, Klaviyo revision, P1-10), Data Health money as £, "two cats", Email tab explains Klaviyo vs UTM attribution, cohort "Active %" vs "Survival" labelled, Growth caption corrected, small segments draw no bar, raw ad campaign ids shortened, yearly NRR note. No orphan grid slots, no duplicate status chips, Customers cards full width, labels wrap instead of truncating, key table columns visible at 1150px, campaign lists without a scroll trap and with a loader, upload history and channel rules scroll sideways, keyboard/screen-reader tooltips, heatmap contrast. New channel rules for Brave/Ecosia/Yahoo search, TikTok, and Mollie as "Payment redirect (source lost)".
+
+### Cancellation form: why people cancelled and the retention discount
+- `06-discover-cancellation-form.sql` (finds where the form stores answers) and `07-export-cancellation-form.sql` (one row per `hpf_cancel_survey` submission, with the `_hpf_retention_*` offer from the subscription and the paid renewals that spent it; plus a row for each subscription that accepted the offer with no survey).
+- New `cancellation_surveys` table, filled by uploading that CSV on the Upload page (recognised by its header, re-import updates in place, deleting the import removes its rows).
+- Subscribers tab: "Cancellation reasons" panel for the period (by date sent): reasons with counts and shares, satisfaction, would return, and the retention discount (accepted / declined / used on a paid renewal / still subscribed / cancelled anyway). Click a reason or the discount box for the per-person list; CSV export (`/api/metrics/cancellation-surveys[/export]`).
+- The offer is a direct discount, not a coupon, so "accepted" = the survey's `retention_used` or the subscription's `_hpf_retention_accepted_at`, and "used" = a completed/processing renewal carrying `_hpf_retention_factor`.
+
+### On Hold tagged by reason: paused manually vs payment pending
+- New `subscription_status_changes.hold_reason`, parsed from the WooCommerce note on every change to on-hold: "Subscription renewal payment due: …" = `payment_due`; any other change to on-hold (bare status change, bulk edit, customer suspend) = `manual`. Both the CSV import and the direct sync fill it.
+- New metrics `on_hold_manual` + `on_hold_payment_due`, always adding up to `on_hold`. The latest hold before the snapshot instant decides; with no tagged history, an unpaid (pending/failed) renewal newer than the last completed order = payment pending, else manual (marked "estimate").
+- The On Hold card note, its tooltip and the client report show the split; the Data Health on-hold list tags each subscription with Reason and Reason from.
+- Subscribers tab: an "On Hold by reason" panel with both counts and a split bar. Clicking a count opens the list of who is on hold (reason, on hold since, days, last payment, amount), filterable by reason, with CSV export (`/api/metrics/on-hold`, `/api/metrics/on-hold/export`). It follows the period filter.
+- On the current data: 95 on hold = 44 paused manually + 51 payment pending.
+
 ### P0-1: "Today" is the real current date
 - New `App\Support\Clock`: one `now()` (server time, Europe/London) plus GMT/local conversion helpers.
 - New `App\Services\DataFreshness`: the data timestamp is the last completed import or sync; snapshot metrics are measured at `min(period end, data timestamp, now)`.

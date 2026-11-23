@@ -9,3 +9,11 @@
 /.github export-ignore
 CHANGELOG.md export-ignore
 .styleci.yml export-ignore
+
+# Dev-only: kept in the repo, left out of deployment archives (git archive /
+# Forge / Envoyer zip builds). A plain `git pull` deploy still fetches them;
+# they are never served, since only public/ is web-reachable.
+/tests export-ignore
+phpunit.xml export-ignore
+.editorconfig export-ignore
+README.md export-ignore

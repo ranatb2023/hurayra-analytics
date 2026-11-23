@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\Record;
+
 /**
  * One window of orders, pre-aggregated by (status, relationship).
  *
@@ -73,23 +75,40 @@ final class OrderRollup
         return $n;
     }
 
+    /** Paid orders ({@see Record::PAID_STATUSES}) in one relationship, or any. */
+    public function paid(?string $relationship = null): int
+    {
+        $n = 0;
+
+        foreach (Record::PAID_STATUSES as $status) {
+            $n += $relationship === null ? $this->status($status) : $this->count($status, $relationship);
+        }
+
+        return $n;
+    }
+
     /**
-     * Completed revenue, optionally narrowed to a set of relationships.
+     * Paid revenue ({@see Record::PAID_STATUSES}), optionally narrowed to a
+     * set of relationships.
      *
      * @param  array<int, string>|null  $relationships  null = all of them
      */
     public function revenue(?array $relationships = null): float
     {
-        $cells = $this->cells['completed'] ?? [];
-
-        if ($relationships === null) {
-            return array_sum(array_column($cells, 'amount'));
-        }
-
         $sum = 0.0;
 
-        foreach ($relationships as $rel) {
-            $sum += $cells[$rel]['amount'] ?? 0.0;
+        foreach (Record::PAID_STATUSES as $status) {
+            $cells = $this->cells[$status] ?? [];
+
+            if ($relationships === null) {
+                $sum += array_sum(array_column($cells, 'amount'));
+
+                continue;
+            }
+
+            foreach ($relationships as $rel) {
+                $sum += $cells[$rel]['amount'] ?? 0.0;
+            }
         }
 
         return $sum;

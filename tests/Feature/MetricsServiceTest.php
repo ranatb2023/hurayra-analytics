@@ -98,8 +98,9 @@ class MetricsServiceTest extends TestCase
         $this->assertSame(5, $m['subscription_purchases']);    // 101,102,103,107,108
         $this->assertSame(3, $m['renewal_purchases']);         // 102,103,108
         $this->assertSame(4, $m['completed']);                 // 101,102,104,107
-        $this->assertSame(5, $m['new_not_completed_standard']); // 103,105,106,108,109
-        $this->assertSame(2, $m['new_not_completed_strict']);   // 103 pending, 109 processing
+        // Processing (109) is paid, so it is no longer "not completed".
+        $this->assertSame(4, $m['new_not_completed_standard']); // 103,105,106,108
+        $this->assertSame(1, $m['new_not_completed_strict']);   // 103 pending
     }
 
     public function test_not_completed_breakdown(): void
@@ -117,18 +118,19 @@ class MetricsServiceTest extends TestCase
         $standard = $this->metrics->compute($this->march()->start, $this->march()->end, strictNotCompleted: false);
         $strict = $this->metrics->compute($this->march()->start, $this->march()->end, strictNotCompleted: true);
 
-        $this->assertSame(5, $standard['new_not_completed']);
-        $this->assertSame(2, $strict['new_not_completed']);
+        $this->assertSame(4, $standard['new_not_completed']);
+        $this->assertSame(1, $strict['new_not_completed']);
     }
 
     public function test_supporting_totals(): void
     {
         $m = $this->metrics->compute($this->march()->start, $this->march()->end);
 
-        $this->assertSame(425.0, $m['total_revenue']);          // 100+50+200+75
-        $this->assertSame(106.25, $m['average_order_value']);   // 425 / 4
+        // Paid = completed + processing: 109 (processing, 60) counts.
+        $this->assertSame(485.0, $m['total_revenue']);          // 100+50+200+75+60
+        $this->assertSame(97.0, $m['average_order_value']);     // 485 / 5 paid orders
         $this->assertSame(225.0, $m['subscription_revenue']);   // 100+50+75
-        $this->assertSame(200.0, $m['one_time_revenue']);       // 204 only
+        $this->assertSame(260.0, $m['one_time_revenue']);       // 104 + 109
         $this->assertSame(0.67, $m['active_cancelled_ratio']);  // 2 active / 3 cancelled
     }
 
@@ -137,7 +139,7 @@ class MetricsServiceTest extends TestCase
         $m = $this->metrics->compute($this->march()->start, $this->march()->end);
 
         // The 999 February order must not leak into March revenue.
-        $this->assertSame(425.0, $m['total_revenue']);
+        $this->assertSame(485.0, $m['total_revenue']);
     }
 
     public function test_compare_to_previous_period(): void

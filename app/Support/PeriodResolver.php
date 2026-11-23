@@ -71,7 +71,7 @@ class PeriodResolver
         }
 
         $label = "Week {$week} of ".$firstOfMonth->format('F Y')
-            .' ('.$start->format('M j').'–'.$end->subDay()->format('j').')';
+            .' ('.$start->format('j').'–'.$end->subDay()->format('j M').')';
 
         return new Period($start, $end, 'week', $label);
     }
@@ -115,7 +115,7 @@ class PeriodResolver
             $start,
             $end,
             'custom',
-            $start->format('M j, Y').' – '.$end->subDay()->format('M j, Y'),
+            $start->format('j M Y').' – '.$end->subDay()->format('j M Y'),
         );
     }
 }

@@ -48,7 +48,7 @@ class ChannelRulesTest extends TestCase
 
     public function test_unmapped_sources_are_other(): void
     {
-        $this->assertSame('Other', $this->resolve('tiktok.com', 'referral'));
+        $this->assertSame('Other', $this->resolve('snapchat.com', 'referral'));
         $this->assertSame('Other', $this->resolve('google', 'referral')); // google needs cpc or organic
         $this->assertSame('Other', $this->resolve(null));
     }
@@ -59,7 +59,7 @@ class ChannelRulesTest extends TestCase
 
         $rows = [
             ['ig', 'social'], ['instagram', 'social'], ['l.instagram.com', 'social'],
-            ['google', 'cpc'], ['google', 'organic'], ['tiktok.com', 'referral'], ['(direct)', null],
+            ['google', 'cpc'], ['google', 'organic'], ['snapchat.com', 'referral'], ['(direct)', null],
         ];
         foreach ($rows as $i => [$source, $medium]) {
             Record::create([
@@ -87,7 +87,7 @@ class ChannelRulesTest extends TestCase
 
     public function test_the_small_segment_rollup_merges_into_other(): void
     {
-        foreach (['tiktok.com', 'linktr.ee', 'bing.com'] as $i => $source) {
+        foreach (['snapchat.com', 'linktr.ee', 'bing.com'] as $i => $source) {
             Record::create([
                 'id' => $i + 1, 'import_id' => null, 'record_type' => 'shop_subscription', 'status' => 'active',
                 'date_created_gmt' => '2026-09-01 10:00:00', 'total_amount' => 0, 'subscription_id' => null,
@@ -107,12 +107,12 @@ class ChannelRulesTest extends TestCase
         Record::create([
             'id' => 1, 'import_id' => null, 'record_type' => 'shop_subscription', 'status' => 'active',
             'date_created_gmt' => '2026-09-01 10:00:00', 'total_amount' => 0, 'subscription_id' => null,
-            'order_relationship' => 'subscription', 'utm_source' => 'tiktok.com', 'utm_medium' => 'referral',
+            'order_relationship' => 'subscription', 'utm_source' => 'snapchat.com', 'utm_medium' => 'referral',
         ]);
 
         $unmapped = (new MetricsService)->unmappedSources();
 
-        $this->assertSame([['source' => 'tiktok.com', 'medium' => 'referral', 'subscriptions' => 1, 'orders' => 0]], $unmapped);
+        $this->assertSame([['source' => 'snapchat.com', 'medium' => 'referral', 'subscriptions' => 1, 'orders' => 0]], $unmapped);
     }
 
     public function test_rules_are_editable_from_the_admin_screen(): void
@@ -120,19 +120,19 @@ class ChannelRulesTest extends TestCase
         $this->get('/settings/channels')->assertOk()->assertSee('Instagram Organic')->assertSee('Unmapped sources');
 
         $this->post('/settings/channels', [
-            'priority' => 90, 'channel' => 'TikTok', 'sources' => ' TikTok.com , tiktok ', 'mediums' => '',
+            'priority' => 90, 'channel' => 'Snapchat', 'sources' => ' Snapchat.com , snapchat ', 'mediums' => '',
         ])->assertRedirect('/settings/channels');
 
-        $rule = ChannelRule::where('channel', 'TikTok')->first();
-        $this->assertSame('tiktok.com, tiktok', $rule->sources);
+        $rule = ChannelRule::where('channel', 'Snapchat')->first();
+        $this->assertSame('snapchat.com, snapchat', $rule->sources);
         $this->assertNull($rule->mediums);
-        $this->assertSame('TikTok', $this->resolve('tiktok.com', 'referral'));
+        $this->assertSame('Snapchat', $this->resolve('snapchat.com', 'referral'));
 
         $this->put("/settings/channels/{$rule->id}", [
-            'priority' => 90, 'channel' => 'TikTok Ads', 'sources' => 'tiktok.com', 'mediums' => 'paid',
+            'priority' => 90, 'channel' => 'Snapchat Ads', 'sources' => 'snapchat.com', 'mediums' => 'paid',
         ])->assertRedirect('/settings/channels');
-        $this->assertSame('TikTok Ads', $this->resolve('tiktok.com', 'paid'));
-        $this->assertSame('Other', $this->resolve('tiktok.com', 'referral'));
+        $this->assertSame('Snapchat Ads', $this->resolve('snapchat.com', 'paid'));
+        $this->assertSame('Other', $this->resolve('snapchat.com', 'referral'));
 
         $this->delete("/settings/channels/{$rule->id}")->assertRedirect('/settings/channels');
         $this->assertNull(ChannelRule::find($rule->id));

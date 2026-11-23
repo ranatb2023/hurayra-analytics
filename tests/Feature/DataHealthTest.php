@@ -44,7 +44,7 @@ class DataHealthTest extends TestCase
 
         // One customer, two active subs to the same product.
         foreach ([10, 11] as $id) {
-            $this->row($id, 'shop_subscription', 'active', ['billing_email' => 'twice@example.test', 'utm_source' => 'tiktok.com']);
+            $this->row($id, 'shop_subscription', 'active', ['billing_email' => 'twice@example.test', 'utm_source' => 'snapchat.com']);
             $this->row(100 + $id, 'shop_order', 'completed', ['subscription_id' => $id, 'order_relationship' => 'parent',
                 'primary_product' => 'Chicken (HPF001)']);
         }
@@ -88,7 +88,7 @@ class DataHealthTest extends TestCase
 
     public function test_unmapped_sources_are_listed(): void
     {
-        $this->assertSame(['tiktok.com'], array_column($this->section('unmapped_sources')['rows'], 'source'));
+        $this->assertSame(['snapchat.com'], array_column($this->section('unmapped_sources')['rows'], 'source'));
     }
 
     public function test_on_hold_subscriptions_are_bucketed_by_age(): void

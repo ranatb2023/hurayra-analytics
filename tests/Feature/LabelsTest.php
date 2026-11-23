@@ -55,9 +55,11 @@ class LabelsTest extends TestCase
 
         $this->assertStringContainsString('Awaiting payment', $html);
         $this->assertStringContainsString('Pending cancellation', $html);
-        // Overview (status mix chips) and Subscribers (state chips) both carry them.
-        $this->assertGreaterThanOrEqual(2, substr_count($html, "value('awaiting_payment')"));
-        $this->assertGreaterThanOrEqual(2, substr_count($html, "value('pending_cancellation')"));
+        // The Subscribers state chips carry them; the Overview shows them as
+        // rows of the subscription mix rather than repeating the chips.
+        $this->assertGreaterThanOrEqual(1, substr_count($html, "value('awaiting_payment')"));
+        $this->assertGreaterThanOrEqual(1, substr_count($html, "value('pending_cancellation')"));
+        $this->assertStringContainsString("@include('dashboard.partials.status-mix'", file_get_contents(resource_path('views/dashboard/index.blade.php')));
     }
 
     // ---- P2-2 ---------------------------------------------------------------

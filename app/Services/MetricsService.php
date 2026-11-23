@@ -54,7 +54,8 @@ class MetricsService
 {
     private const STATUS_BREAKDOWN = ['cancelled', 'failed', 'refunded', 'pending', 'processing'];
 
-    private const STRICT_NOT_COMPLETED = ['pending', 'processing'];
+    // Processing is paid ({@see Record::PAID_STATUSES}), so only pending is left.
+    private const STRICT_NOT_COMPLETED = ['pending'];
 
     private const SUBSCRIPTION_PURCHASE_RELS = ['parent', 'renewal'];
 
@@ -63,6 +64,15 @@ class MetricsService
 
     /** How many months {@see churnSeries()} returns by default. */
     private const CHURN_SERIES_MONTHS = 12;
+
+    /**
+     * A subscription that ended and whose customer started another within
+     * this many days is a plan switch, not churn: they never left.
+     */
+    public const PLAN_SWITCH_DAYS = 14;
+
+    /** How early before its due date WooCommerce may attempt a renewal. */
+    private const RENEWAL_RETRY_GRACE_DAYS = 3;
 
     /**
      * How many billing cycles an `on-hold` subscription may miss before it is
@@ -125,6 +135,9 @@ class MetricsService
 
     /** @var array{0:string, 1:string}|null [now, asOf] memo; see asOfGmt() */
     private ?array $asOfMemo = null;
+
+    /** @var array<int, true>|null memo for planSwitches() */
+    private ?array $planSwitchMemo = null;
 
     public function __construct(?DataFreshness $freshness = null)
     {
@@ -240,7 +253,7 @@ class MetricsService
         // any status a plugin invents tomorrow.
         $notCompletedStandard = array_sum(array_map(
             fn (string $st) => $orderStats->status($st),
-            array_diff(Record::ORDER_STATUSES, ['completed']),
+            array_diff(Record::ORDER_STATUSES, Record::PAID_STATUSES),
         ));
         $notCompletedStrict = array_sum(array_map(
             fn (string $st) => $orderStats->status($st),
@@ -288,8 +301,13 @@ class MetricsService
         $realChurn = max(0, $churnedInPeriod - $failedSignups);
         $revenue = $this->revenueRetention($startS, $endS);
 
-        $renewalTotal = $orderStats->relationship('renewal');
-        $renewalCompleted = $orderStats->count('completed', 'renewal');
+        // Renewal outcomes. Paid = completed or processing. Failed = the
+        // `failed` status only: a pending renewal is still awaiting payment,
+        // not a failure, and is counted on its own. Counts and values below
+        // come from the same rows, so they always agree.
+        $renewalPaid = $orderStats->paid('renewal');
+        $renewalFailed = $orderStats->count('failed', 'renewal');
+        $renewalPending = $orderStats->count('pending', 'renewal');
 
         // On hold with no successful payment for 1.5 cycles: stopped paying,
         // but churn only counts cancelled/expired, so they never show up in
@@ -300,16 +318,20 @@ class MetricsService
             $dormant,
             fn (array $d) => $d['dormant_from'] >= $startS && $d['dormant_from'] < $endS,
         ));
-        $adjustedChurn = $churnedInPeriod + $dormantCrossed;
+        // Real churn plus the on-hold subscriptions that went dormant this
+        // period: like for like with the Real headline, not built on gross.
+        $adjustedChurn = $realChurn + $dormantCrossed;
 
         // What is at risk: every dormant subscription's monthly value, plus
         // the renewal orders in the period that failed or are still unpaid.
-        $failedRenewalValue = $orderStats->amount('failed', 'renewal') + $orderStats->amount('pending', 'renewal');
+        $failedRenewalValue = $orderStats->amount('failed', 'renewal');
+        $pendingRenewalValue = $orderStats->amount('pending', 'renewal');
         $dormantValue = array_sum(array_column($dormant, 'monthly_value'));
-        $revenueAtRisk = $dormantValue + $failedRenewalValue;
+        $revenueAtRisk = $dormantValue + $failedRenewalValue + $pendingRenewalValue;
 
         // ---- Customers (orders in window, keyed by customer_id) ----
         $byCustomer = $this->ordersInWindow($startS, $endS)
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('customer_id')
             ->selectRaw('customer_id, COUNT(*) as orders')
             ->groupBy('customer_id')
@@ -334,6 +356,9 @@ class MetricsService
             'pending_cancellation_status' => $pendingCancelStatus,
             'scheduled_cancellations' => $scheduledCancellations,
             'on_hold' => $this->snapshotCount('on-hold', $endS),
+            // The same subscriptions, split by why they are paused. The two
+            // always add up to on_hold.
+            ...$this->onHoldByReason($endS),
             // WooCommerce's `pending` subscription status: created, first
             // payment not taken yet. Not the same thing as pending cancellation.
             'awaiting_payment' => $statusBreakdownSub['pending'] ?? 0,
@@ -365,7 +390,8 @@ class MetricsService
             'net_revenue_known' => $money['known'],
             'gross_margin_pct' => $this->grossMarginPct(),
             'contribution' => $this->contributionFrom($money['net_after_refunds']),
-            'average_order_value' => $completed > 0 ? round($totalRevenue / $completed, 2) : 0.0,
+            // Paid revenue over paid orders: the same rows on both sides.
+            'average_order_value' => $orderStats->paid() > 0 ? round($totalRevenue / $orderStats->paid(), 2) : 0.0,
             'subscription_revenue' => round($subscriptionRevenue, 2),
             'one_time_revenue' => round($oneTimeRevenue, 2),
             'cancelled_snapshot' => $cancelledSnapshot,
@@ -380,6 +406,8 @@ class MetricsService
             // churned ÷ (active at start + new in period)
             'monthly_churn_rate' => $this->churnRate($churnedInPeriod, $churnBase),
             'churned_in_period' => $churnedInPeriod,
+            // Ended but restarted within PLAN_SWITCH_DAYS: not counted above.
+            'plan_switches_in_period' => $this->planSwitchesBetween($startS, $endS),
             'failed_signups' => $failedSignups,
             'churned_net_of_failed' => $realChurn,
             // The rate with never-activated subscriptions taken out. Shown
@@ -389,7 +417,7 @@ class MetricsService
             'churn_base' => $churnBase,
             'on_hold_dormant' => count($dormant),
             'on_hold_dormant_in_period' => $dormantCrossed,
-            // (cancelled + expired + newly dormant on-hold) ÷ churn base
+            // (real churn + newly dormant on-hold) ÷ churn base
             'churned_adjusted' => $adjustedChurn,
             'monthly_churn_rate_adjusted' => $this->churnRate($adjustedChurn, $churnBase),
             'mrr' => $recurring['mrr'],
@@ -403,11 +431,17 @@ class MetricsService
             'active_at_period_start' => $activeAtStart,
             'tenure_at_churn' => $this->tenureAtChurn($startS, $endS),
             'end_date_coverage' => $this->endDateCoverage($endS),
-            'renewal_success_rate' => $renewalTotal > 0 ? round($renewalCompleted / $renewalTotal * 100, 1) : null,
-            'failed_renewals' => $renewalTotal - $renewalCompleted,
+            // paid ÷ (paid + failed): renewals still awaiting payment have not
+            // succeeded or failed yet.
+            'renewal_success_rate' => ($renewalPaid + $renewalFailed) > 0
+                ? round($renewalPaid / ($renewalPaid + $renewalFailed) * 100, 1)
+                : null,
+            'failed_renewals' => $renewalFailed,
+            'renewals_awaiting_payment' => $renewalPending,
             'revenue_at_risk' => round($revenueAtRisk, 2),
             'revenue_at_risk_dormant' => round($dormantValue, 2),
             'revenue_at_risk_failed_renewals' => round($failedRenewalValue, 2),
+            'revenue_at_risk_pending_renewals' => round($pendingRenewalValue, 2),
 
             // ----- Customers -----
             'unique_customers' => $uniqueCustomers,
@@ -446,12 +480,12 @@ class MetricsService
         return new OrderRollup($rows->all());
     }
 
-    /** Customers whose first-ever order falls inside the window (new acquisitions). */
+    /** Customers whose first-ever paid order falls inside the window (new acquisitions). */
     private function newCustomerCount(string $start, string $end): int
     {
         $firsts = DB::table('records')
             ->where('record_type', 'shop_order')
-            ->whereIn('status', Record::ORDER_STATUSES)
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('customer_id')
             ->whereNotNull('date_created_gmt')
             ->selectRaw('customer_id, MIN(date_created_gmt) as first_order')
@@ -473,7 +507,7 @@ class MetricsService
     {
         return DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('customer_id')
             ->when($start !== null, fn (Builder $q) => $q->where('date_created_gmt', '>=', $start))
             ->when($end !== null, fn (Builder $q) => $q->where('date_created_gmt', '<', $end))
@@ -629,6 +663,7 @@ class MetricsService
         $orders = fn (Builder $q) => $q->where('record_type', 'shop_order')
             ->whereIn('status', Record::ORDER_STATUSES);
         $completed = fn (Builder $q) => $orders($q)->where('status', 'completed');
+        $paid = fn (Builder $q) => $orders($q)->whereIn('status', Record::PAID_STATUSES);
         $renewals = fn (Builder $q) => $orders($q)->where('order_relationship', 'renewal');
 
         return [
@@ -657,22 +692,22 @@ class MetricsService
                     ? null
                     : round((float) $row->net - (float) $row->refunded, 2),
                 'empty' => null,
-                'where' => $completed,
+                'where' => $paid,
             ],
 
-            'total_revenue' => $this->sumMetric('Revenue (gross)', 'total_amount', $completed),
+            'total_revenue' => $this->sumMetric('Revenue (gross)', 'total_amount', $paid),
             'average_order_value' => $this->ratioMetric(
-                'Average Order Value', 'SUM(total_amount)', 'COUNT(*)', 'currency', $completed,
+                'Average Order Value', 'SUM(total_amount)', 'COUNT(*)', 'currency', $paid,
             ),
-            'refunded' => $this->sumMetric('Refunds', 'refunded_amount', $completed),
+            'refunded' => $this->sumMetric('Refunds', 'refunded_amount', $paid),
 
             // The leading indicator of involuntary churn: a card renewal that
             // fails is a subscriber lost some weeks before the cancellation
             // shows up in the churn rate.
             'renewal_success_rate' => $this->ratioMetric(
                 'Renewal Success Rate',
-                "SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END)",
-                'COUNT(*)',
+                "SUM(CASE WHEN status IN ('completed', 'processing') THEN 1 ELSE 0 END)",
+                "NULLIF(SUM(CASE WHEN status IN ('completed', 'processing', 'failed') THEN 1 ELSE 0 END), 0)",
                 'percent',
                 $renewals,
             ),
@@ -766,6 +801,16 @@ class MetricsService
             return ['rows' => [], 'end_date_coverage' => null];
         }
 
+        // Never paid: an ended one of these is a failed sign-up, not real churn.
+        $paidSubs = array_flip(DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->whereIn('status', Record::PAID_STATUSES)
+            ->whereNotNull('subscription_id')
+            ->distinct()
+            ->pluck('subscription_id')
+            ->map(fn ($id) => (int) $id)
+            ->all());
+
         $latest = $this->latestDataInstant();
         // The selected period's month when one is given, never past the data.
         $anchor = $until !== null && $until->lt($latest) ? $until->setTimezone(Clock::tz()) : $latest;
@@ -783,6 +828,7 @@ class MetricsService
             $activeEnd = 0;
             $joined = 0;
             $churned = 0;
+            $failedSignups = 0;
 
             foreach ($subs as $sub) {
                 if ($this->wasActiveAt($sub, $startS)) {
@@ -796,6 +842,9 @@ class MetricsService
                 }
                 if ($this->endedBetween($sub, $startS, $endS)) {
                     $churned++;
+                    if (! isset($paidSubs[$sub['id']])) {
+                        $failedSignups++;
+                    }
                 }
             }
 
@@ -809,9 +858,13 @@ class MetricsService
                 'active_start' => $activeStart,
                 'new' => $joined,
                 'churned' => $churned,
+                'failed_signups' => $failedSignups,
+                'churned_real' => $churned - $failedSignups,
                 'paused' => $paused,
                 'active_end' => $activeEnd,
-                'churn_rate' => $this->churnRate($churned, $activeStart + $joined),
+                // Real churn leads, as on the cards; gross kept and labelled.
+                'churn_rate' => $this->churnRate($churned - $failedSignups, $activeStart + $joined),
+                'churn_rate_gross' => $this->churnRate($churned, $activeStart + $joined),
                 // The month the data stops inside is only counted up to the
                 // last row imported. Charting it undashed draws a cliff that is
                 // missing rows, not lost subscribers.
@@ -931,6 +984,7 @@ class MetricsService
     private function endedBetween(array $sub, string $start, string $end): bool
     {
         return $sub['terminal'] && $sub['ended'] !== null
+            && ! isset($this->planSwitches()[$sub['id']])
             && $sub['ended'] >= $start && $sub['ended'] < $end
             && $sub['ended'] <= $this->asOfGmt();
     }
@@ -1203,7 +1257,7 @@ class MetricsService
 
         foreach (DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('subscription_id')
             ->whereNotNull('date_created_gmt')
             ->orderBy('date_created_gmt')
@@ -1273,7 +1327,7 @@ class MetricsService
         // subscriber as having never paid at all.
         $paid = DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('subscription_id')
             ->selectRaw('subscription_id, COUNT(*) as payments, SUM(total_amount) as revenue')
             ->groupBy('subscription_id');
@@ -1284,10 +1338,23 @@ class MetricsService
         // and is resolved in PHP.
         $column = $byChannel ? 'utm_source' : $dimension;
 
+        // The product lives on the orders, not the subscription row: fall
+        // back to the parent order's product, or every sub reads "(none)".
+        $parentProduct = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->where('order_relationship', 'parent')
+            ->whereNotNull('subscription_id')
+            ->whereNotNull('primary_product')
+            ->selectRaw('subscription_id, MAX(primary_product) as product')
+            ->groupBy('subscription_id');
+
+        $segmentExpr = $column === 'primary_product' ? 'COALESCE(s.primary_product, pp.product)' : 's.'.$column;
+
         $perSub = DB::table('records as s')
             ->leftJoinSub($paid, 'p', 'p.subscription_id', '=', 's.id')
+            ->when($column === 'primary_product', fn (Builder $q) => $q->leftJoinSub($parentProduct, 'pp', 'pp.subscription_id', '=', 's.id'))
             ->where('s.record_type', 'shop_subscription')
-            ->selectRaw('s.id, s.'.$column.' as segment, COALESCE(p.payments, 0) as payments, COALESCE(p.revenue, 0) as revenue')
+            ->selectRaw('s.id, '.$segmentExpr.' as segment, COALESCE(p.payments, 0) as payments, COALESCE(p.revenue, 0) as revenue')
             ->selectRaw('s.date_created_gmt as created, s.billing_period, s.billing_interval, s.next_payment_at')
             ->selectRaw('s.utm_medium, s.attribution_type')
             // Optional sign-up window (GMT): "subscribers acquired in this
@@ -1302,9 +1369,16 @@ class MetricsService
         $groups = [];
 
         foreach ($perSub as $r) {
-            $label = $byChannel
-                ? $channels->resolve($r->segment, $r->utm_medium, $r->attribution_type)
-                : ($this->cleanAttribute($r->segment) ?? self::NONE);
+            $label = match (true) {
+                $byChannel => $channels->resolve($r->segment, $r->utm_medium, $r->attribution_type),
+                // Unit AND interval: monthly, every 2 months and every 6 weeks
+                // are different plans, not one "month" / "week" bucket.
+                $dimension === 'billing_period' => $this->cycleLabel(
+                    $this->cleanAttribute($r->billing_period),
+                    $r->billing_interval === null ? null : (int) $r->billing_interval,
+                ) ?? self::NONE,
+                default => $this->cleanAttribute($r->segment) ?? self::NONE,
+            };
             $sub = $book[(int) $r->id] ?? null;
 
             $groups[$label] ??= self::EMPTY_SEGMENT;
@@ -1736,7 +1810,7 @@ class MetricsService
 
         $rows = DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->where('order_relationship', 'one_time')
             ->whereNotIn('status', Record::EXCLUDED_ORDER_STATUSES)
             ->whereNotNull('billing_email')
@@ -1805,7 +1879,7 @@ class MetricsService
 
         foreach (DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('subscription_id')
             ->selectRaw('subscription_id, COUNT(*) as n, SUM(total_amount) as v')
             ->groupBy('subscription_id')
@@ -1876,7 +1950,7 @@ class MetricsService
 
         $paid = DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('subscription_id')
             ->selectRaw('subscription_id, COUNT(*) as payments, MAX(total_amount) as amount')
             ->groupBy('subscription_id');
@@ -1941,6 +2015,12 @@ class MetricsService
      * renewal failed. The save list for the renewal that decides whether a
      * sign-up becomes a customer. Most recently held first.
      *
+     * Only holds that really are a failed renewal: WooCommerce paused it for
+     * a payment due (not a customer or admin pausing it), and no earlier than
+     * one billing cycle after the first payment, less a few days for early
+     * retries. A monthly plan put on hold 10 days after paying has not reached
+     * its renewal yet.
+     *
      * @param  array<int, array<string, mixed>>  $book  from {@see lifecycleSubs()}
      * @return array<int, array<string, mixed>>
      */
@@ -1955,7 +2035,7 @@ class MetricsService
         $paid = [];
         foreach (DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereIn('subscription_id', array_keys($onHold))
             ->selectRaw('subscription_id, COUNT(*) as payments, MAX(total_amount) as amount, MAX(date_created_gmt) as paid_at')
             ->groupBy('subscription_id')
@@ -1965,8 +2045,10 @@ class MetricsService
 
         $details = DB::table('records')
             ->whereIn('id', array_keys($onHold))
-            ->get(['id', 'billing_email', 'customer_id', 'utm_source', 'next_payment_at'])
+            ->get(['id', 'billing_email', 'customer_id', 'utm_source', 'next_payment_at', 'billing_period', 'billing_interval'])
             ->keyBy('id');
+
+        $reasons = $this->holdReasons($asOf);
 
         $rows = [];
         foreach ($onHold as $id => $sub) {
@@ -1974,8 +2056,20 @@ class MetricsService
                 continue;
             }
 
+            // Paused by hand: not a renewal that failed.
+            if (($reasons[$id]['reason'] ?? null) === StatusHistoryImportService::HOLD_MANUAL) {
+                continue;
+            }
+
             $d = $details[$id];
             $heldAt = $this->lastChangeTo($sub['timeline'], 'on-hold', $asOf) ?? $sub['held'];
+
+            // Held before the renewal could have been due.
+            $cycle = $this->cycleDays($d->billing_period, $d->billing_interval === null ? null : (int) $d->billing_interval);
+            $earliestRenewal = CarbonImmutable::parse((string) $paid[$id]->paid_at)->addDays(max(1, $cycle - self::RENEWAL_RETRY_GRACE_DAYS));
+            if ($heldAt !== null && CarbonImmutable::parse($heldAt)->lt($earliestRenewal)) {
+                continue;
+            }
 
             $rows[] = [
                 'id' => $id,
@@ -2033,7 +2127,7 @@ class MetricsService
 
         foreach (DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('subscription_id')
             ->selectRaw('subscription_id, SUM(total_amount) as spend')
             ->groupBy('subscription_id')
@@ -2263,7 +2357,7 @@ class MetricsService
         $seen = [];
         foreach (DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('subscription_id')
             ->whereNotNull('date_created_gmt')
             ->select('subscription_id', 'date_created_gmt')
@@ -2320,7 +2414,7 @@ class MetricsService
     public function oneTimeToSubscription(bool $conversionsOnly = true, bool $includeSameDay = false, int $limit = 0, ?string $start = null, ?string $end = null): array
     {
         $key = $this->customerKeyExpr();
-        $purchase = fn (Builder $q) => $q->where('status', 'completed')->where('total_amount', '>', 0);
+        $purchase = fn (Builder $q) => $q->whereIn('status', Record::PAID_STATUSES)->where('total_amount', '>', 0);
         $minDays = $includeSameDay ? 0 : 1;
 
         // One-time orders, aggregated per customer. The key is computed in a
@@ -2337,7 +2431,7 @@ class MetricsService
         $oneTime = DB::query()->fromSub($oneTimeRows, 'ot')
             ->whereNotNull('ckey')
             ->selectRaw('ckey, MIN(date_created_gmt) as first_at, MAX(date_created_gmt) as last_at, COUNT(*) as orders')
-            ->selectRaw("SUM(CASE WHEN status = 'completed' THEN total_amount ELSE 0 END) as spend")
+            ->selectRaw("SUM(CASE WHEN status IN ('completed', 'processing') THEN total_amount ELSE 0 END) as spend")
             ->selectRaw('MAX(billing_email) as email, MAX(customer_id) as customer_id')
             ->groupBy('ckey')
             ->get()
@@ -2377,7 +2471,7 @@ class MetricsService
         $subOrderRows = DB::table('records')
             ->where('record_type', 'shop_order')
             ->whereIn('order_relationship', self::SUBSCRIPTION_PURCHASE_RELS)
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->selectRaw("{$key} as ckey, total_amount");
 
         $subRevenue = DB::query()->fromSub($subOrderRows, 'so')
@@ -2584,6 +2678,169 @@ class MetricsService
             ->groupBy('status')
             ->pluck('n', 'status')
             ->all();
+    }
+
+    /**
+     * On Hold at $instant split by reason: on_hold_manual + on_hold_payment_due.
+     *
+     * @return array{on_hold_manual:int, on_hold_payment_due:int}
+     */
+    private function onHoldByReason(string $instant): array
+    {
+        $counts = [StatusHistoryImportService::HOLD_MANUAL => 0, StatusHistoryImportService::HOLD_PAYMENT_DUE => 0];
+
+        foreach ($this->holdReasons($instant) as $hold) {
+            $counts[$hold['reason']]++;
+        }
+
+        return [
+            'on_hold_manual' => $counts[StatusHistoryImportService::HOLD_MANUAL],
+            'on_hold_payment_due' => $counts[StatusHistoryImportService::HOLD_PAYMENT_DUE],
+        ];
+    }
+
+    /**
+     * Every subscription on hold at the period end, with why it is paused:
+     * the rows behind On Hold, Paused manually and Payment pending.
+     *
+     * Measured at the same instant as those counts (the period end, capped at
+     * the data timestamp), so the list length always equals On Hold.
+     *
+     * @return array{as_of:string, total:int, manual:int, payment_due:int, rows: array<int, array<string, mixed>>}
+     */
+    public function onHoldSubscriptions(CarbonImmutable $end): array
+    {
+        $asOf = $this->freshness->asOf();
+        $instant = Clock::gmt($end->gt($asOf) ? $asOf : $end);
+
+        $reasons = $this->holdReasons($instant);
+        $ids = array_keys($reasons);
+
+        if ($ids === []) {
+            return ['as_of' => Clock::toLocal($instant)->toDateTimeString(), 'total' => 0, 'manual' => 0, 'payment_due' => 0, 'rows' => []];
+        }
+
+        $timelines = $this->statusTimelines();
+        $estimated = $this->holdStarts();
+
+        $subs = DB::table('records')->whereIn('id', $ids)->get(['id', 'billing_email', 'total_amount', 'billing_period', 'billing_interval'])->keyBy('id');
+        $lastPaid = DB::table('records')
+            ->where('record_type', 'shop_order')
+            ->whereIn('status', Record::PAID_STATUSES)
+            ->whereIn('subscription_id', $ids)
+            ->where('date_created_gmt', '<', $instant)
+            ->selectRaw('subscription_id, MAX(date_created_gmt) AS at')
+            ->groupBy('subscription_id')
+            ->pluck('at', 'subscription_id');
+
+        $rows = [];
+        foreach ($reasons as $id => $hold) {
+            $sub = $subs->get($id);
+            $since = $this->lastChangeTo($timelines[$id] ?? [], 'on-hold', $instant) ?? ($estimated[$id]['held'] ?? null);
+            $paid = $lastPaid[$id] ?? null;
+
+            $rows[] = [
+                'id' => $id,
+                'customer' => $sub?->billing_email,
+                'reason' => $hold['reason'],
+                'reason_from' => $hold['source'],
+                'on_hold_since' => $since === null ? null : Clock::toLocal($since)->format('Y-m-d H:i'),
+                'days_on_hold' => $since === null ? null : (int) floor(CarbonImmutable::parse($since, 'UTC')->diffInDays(CarbonImmutable::parse($instant, 'UTC'))),
+                'last_payment' => $paid === null ? null : Clock::toLocal((string) $paid)->format('Y-m-d'),
+                'amount' => $sub === null ? null : round((float) $sub->total_amount, 2),
+                'plan' => $sub?->billing_period === null ? null : trim(($sub->billing_interval > 1 ? $sub->billing_interval.' ' : '').$sub->billing_period),
+            ];
+        }
+
+        // Longest on hold first: the ones most likely never coming back.
+        usort($rows, fn ($a, $z) => ($z['days_on_hold'] ?? -1) <=> ($a['days_on_hold'] ?? -1));
+
+        $manual = count(array_filter($rows, fn ($r) => $r['reason'] === StatusHistoryImportService::HOLD_MANUAL));
+
+        return [
+            'as_of' => Clock::toLocal($instant)->toDateTimeString(),
+            'total' => count($rows),
+            'manual' => $manual,
+            'payment_due' => count($rows) - $manual,
+            'rows' => $rows,
+        ];
+    }
+
+    /**
+     * Why each subscription on hold at $instant is paused, keyed by id.
+     *
+     *  - From the status history: the reason on the last change to on-hold
+     *    before $instant, which WooCommerce's note gives away ("Subscription
+     *    renewal payment due: ..." = payment_due, anything else = manual).
+     *  - With no tagged history: estimated from the orders. An unpaid renewal
+     *    (pending or failed) newer than the last completed order means
+     *    WooCommerce is waiting on a payment; no unpaid renewal means someone
+     *    paused it by hand.
+     *
+     * The set of subscriptions is exactly the one {@see snapshotCount()}
+     * counts, so the reasons always add up to On Hold.
+     *
+     * @return array<int, array{reason:string, source:string}>
+     */
+    public function holdReasons(string $instant): array
+    {
+        $ids = $this->subscriptionLifecycle()
+            ->whereNotNull('s.date_created_gmt')
+            ->where('s.date_created_gmt', '<', $instant)
+            ->where(fn (Builder $q) => $this->whereStatusAt($q, 'on-hold', $instant))
+            ->pluck('s.id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $out = [];
+
+        foreach (array_chunk($ids, 1000) as $chunk) {
+            $changes = DB::table('subscription_status_changes')
+                ->whereIn('subscription_id', $chunk)
+                ->where('to_status', 'on-hold')
+                ->whereNotNull('hold_reason')
+                ->where('changed_at', '<', $instant)
+                ->orderBy('changed_at')
+                ->orderBy('id')
+                ->get(['subscription_id', 'hold_reason']);
+
+            // Oldest first, so the last write per subscription is its latest hold.
+            foreach ($changes as $c) {
+                $out[(int) $c->subscription_id] = ['reason' => (string) $c->hold_reason, 'source' => 'status history'];
+            }
+        }
+
+        $untagged = array_values(array_diff($ids, array_keys($out)));
+
+        if ($untagged !== []) {
+            $orders = DB::table('records')
+                ->where('record_type', 'shop_order')
+                ->whereIn('subscription_id', $untagged)
+                ->whereNotNull('date_created_gmt')
+                ->where('date_created_gmt', '<', $instant)
+                ->selectRaw("subscription_id,
+                    MAX(CASE WHEN status IN ('completed', 'processing') THEN date_created_gmt END) AS last_paid,
+                    MAX(CASE WHEN order_relationship = 'renewal' AND status IN ('pending', 'failed') THEN date_created_gmt END) AS last_unpaid")
+                ->groupBy('subscription_id')
+                ->get()
+                ->keyBy('subscription_id');
+
+            foreach ($untagged as $id) {
+                $o = $orders->get($id);
+                $unpaid = $o?->last_unpaid !== null && ($o->last_paid === null || $o->last_unpaid > $o->last_paid);
+
+                $out[$id] = [
+                    'reason' => $unpaid ? StatusHistoryImportService::HOLD_PAYMENT_DUE : StatusHistoryImportService::HOLD_MANUAL,
+                    'source' => 'estimate',
+                ];
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -2807,7 +3064,7 @@ class MetricsService
     {
         $lastPaid = DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('subscription_id')
             ->whereNotNull('date_created_gmt')
             ->selectRaw('subscription_id, MAX(date_created_gmt) as last_paid_at')
@@ -2883,7 +3140,7 @@ class MetricsService
     {
         $end = $this->capAtAsOf($end);
 
-        return $this->subscriptionLifecycle()
+        return $this->withoutPlanSwitches($this->subscriptionLifecycle())
             ->whereIn('s.status', self::TERMINAL)
             ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
             ->whereRaw($this->effectiveEndExpr().' < ?', [$end])
@@ -2891,7 +3148,7 @@ class MetricsService
                 $q->from('records as paid')
                     ->whereColumn('paid.subscription_id', 's.id')
                     ->where('paid.record_type', 'shop_order')
-                    ->where('paid.status', 'completed')
+                    ->whereIn('paid.status', Record::PAID_STATUSES)
                     ->selectRaw('1');
             })
             ->count();
@@ -2919,7 +3176,7 @@ class MetricsService
 
         $lastPaid = DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereNotNull('subscription_id')
             ->where('date_created_gmt', '<', $end)
             ->selectRaw('subscription_id, MAX(date_created_gmt) as last_paid_at')
@@ -2986,7 +3243,7 @@ class MetricsService
     private function revenueBreakdown(string $start, string $end): array
     {
         $row = $this->ordersInWindow($start, $end)
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->selectRaw('SUM(net_amount) as net, SUM(tax_amount) as tax, SUM(shipping_amount) as shipping')
             ->selectRaw('SUM(refunded_amount) as refunded, COUNT(net_amount) as with_net, COUNT(*) as n')
             ->first();
@@ -3033,6 +3290,7 @@ class MetricsService
         $key = $this->customerKeyExpr();
 
         return (int) $this->ordersInWindow($start, $end)
+            ->whereIn('status', Record::PAID_STATUSES)
             ->selectRaw("COUNT(DISTINCT {$key}) as n")
             ->value('n');
     }
@@ -3241,7 +3499,7 @@ class MetricsService
         foreach (array_chunk($ids, 1000) as $chunk) {
             $orders = DB::table('records')
                 ->where('record_type', 'shop_order')
-                ->where('status', 'completed')
+                ->whereIn('status', Record::PAID_STATUSES)
                 ->whereIn('subscription_id', $chunk)
                 ->whereNotNull('date_created_gmt')
                 ->where('date_created_gmt', '<', $instant)
@@ -3280,6 +3538,54 @@ class MetricsService
             ->count();
     }
 
+    /**
+     * Ended subscriptions whose customer started another one within
+     * {@see PLAN_SWITCH_DAYS} of the end: plan switches and quick restarts.
+     * They are left out of every churn count (gross, real, adjusted, the
+     * month-by-month series), and flagged on the Subscribers Lost list.
+     *
+     * The window looks forward from the end date, so someone who left in the
+     * last fortnight of the data can still turn into a switch on a later import.
+     *
+     * @return array<int, true> keyed by subscription id
+     */
+    public function planSwitches(): array
+    {
+        if ($this->planSwitchMemo !== null) {
+            return $this->planSwitchMemo;
+        }
+
+        $ended = $this->subscriptionLifecycle()
+            ->whereIn('s.status', self::TERMINAL)
+            ->selectRaw('s.id, s.billing_email, s.customer_id, '.$this->effectiveEndExpr().' as ended')
+            ->get();
+
+        $index = $this->subscriptionsByCustomer();
+        $out = [];
+
+        foreach ($ended as $row) {
+            if ($row->ended === null) {
+                continue;
+            }
+
+            $back = $this->returnAfter($row, $index);
+
+            if ($back['returned'] === true && $back['days_to_return'] !== null && $back['days_to_return'] <= self::PLAN_SWITCH_DAYS) {
+                $out[(int) $row->id] = true;
+            }
+        }
+
+        return $this->planSwitchMemo = $out;
+    }
+
+    /** Leave plan switches out of a churn query on `s`. */
+    private function withoutPlanSwitches(Builder $q): Builder
+    {
+        $ids = array_keys($this->planSwitches());
+
+        return $ids === [] ? $q : $q->whereNotIn('s.id', $ids);
+    }
+
     /** Subscribers who left during [start, end) — the numerator of churn. */
     private function churnedBetween(string $start, string $end): int
     {
@@ -3287,8 +3593,26 @@ class MetricsService
         // a pending cancellation, not churn.
         $end = $this->capAtAsOf($end);
 
-        return $this->subscriptionLifecycle()
+        return $this->withoutPlanSwitches($this->subscriptionLifecycle())
             ->whereIn('s.status', self::TERMINAL)
+            ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
+            ->whereRaw($this->effectiveEndExpr().' < ?', [$end])
+            ->count();
+    }
+
+    /** Plan switches whose old subscription ended during [start, end). */
+    private function planSwitchesBetween(string $start, string $end): int
+    {
+        $ids = array_keys($this->planSwitches());
+
+        if ($ids === []) {
+            return 0;
+        }
+
+        $end = $this->capAtAsOf($end);
+
+        return $this->subscriptionLifecycle()
+            ->whereIn('s.id', $ids)
             ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
             ->whereRaw($this->effectiveEndExpr().' < ?', [$end])
             ->count();
@@ -3316,8 +3640,8 @@ class MetricsService
             ->whereIn('status', Record::ORDER_STATUSES)
             ->whereNotNull('subscription_id')
             ->selectRaw('subscription_id, COUNT(*) as orders')
-            ->selectRaw("SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders")
-            ->selectRaw("SUM(CASE WHEN status = 'completed' THEN total_amount ELSE 0 END) as spend")
+            ->selectRaw("SUM(CASE WHEN status IN ('completed', 'processing') THEN 1 ELSE 0 END) as completed_orders")
+            ->selectRaw("SUM(CASE WHEN status IN ('completed', 'processing') THEN total_amount ELSE 0 END) as spend")
             ->groupBy('subscription_id');
 
         $base = $this->subscriptionLifecycle()
@@ -3362,11 +3686,17 @@ class MetricsService
                 // part of the base the rate divides by.
                 'joined_in_period' => $r->created >= $start,
                 'had_purchase' => $completed > 0,
+                // Restarted within PLAN_SWITCH_DAYS: listed, but not churn.
+                'plan_switch' => isset($this->planSwitches()[(int) $r->id]),
             ] + $this->returnAfter($r, $index);
         }
 
+        // Plan switches last, so the rows the churn number counts come first.
+        usort($rows, fn ($a, $z) => $a['plan_switch'] <=> $z['plan_switch']);
+
         return [
             'total' => count($rows),
+            'counted' => count(array_filter($rows, fn ($r) => ! $r['plan_switch'])),
             'returned' => $limit === null ? count($rows) : min($limit, count($rows)),
             'summary' => $this->winBackSummary($rows),
             'rows' => $limit === null ? $rows : array_slice($rows, 0, $limit),
@@ -3452,6 +3782,7 @@ class MetricsService
             'unidentifiable' => count($rows) - count($known),
             'resubscribed' => count($back),
             'same_day_switches' => count(array_filter($back, fn ($r) => $r['same_day_switch'])),
+            'plan_switches' => count(array_filter($rows, fn ($r) => $r['plan_switch'] ?? false)),
             'still_active' => count($stillActive),
             'rate' => count($known) > 0 ? round(count($back) / count($known) * 100, 1) : null,
             'median_days_to_return' => $this->median($gaps),
@@ -3482,7 +3813,7 @@ class MetricsService
         // Ascending, so the last write per subscription is the newest order.
         $orders = DB::table('records')
             ->where('record_type', 'shop_order')
-            ->where('status', 'completed')
+            ->whereIn('status', Record::PAID_STATUSES)
             ->whereIn('subscription_id', $ids)
             ->whereNotNull('date_created_gmt')
             ->orderBy('date_created_gmt')
@@ -3559,7 +3890,7 @@ class MetricsService
     {
         $end = $this->capAtAsOf($end);
 
-        $rows = $this->subscriptionLifecycle()
+        $rows = $this->withoutPlanSwitches($this->subscriptionLifecycle())
             ->whereNotNull('s.date_created_gmt')
             ->whereIn('s.status', self::TERMINAL)
             ->whereRaw($this->effectiveEndExpr().' >= ?', [$start])
@@ -3665,7 +3996,7 @@ class MetricsService
             $q->from('records as linked_order')
                 ->whereColumn('linked_order.subscription_id', 'records.id')
                 ->where('linked_order.record_type', 'shop_order')
-                ->where('linked_order.status', 'completed')
+                ->whereIn('linked_order.status', Record::PAID_STATUSES)
                 ->selectRaw('1');
         };
     }
